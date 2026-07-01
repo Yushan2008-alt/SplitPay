@@ -28,7 +28,7 @@ export class RefreshTokenEntity extends BaseEntity {
   isRevoked: boolean;
 
   // [SECURITY] familyId groups tokens from same login session.
-  // Wenn ein Token aus einer Family gestohlen wird, kann die ganze Family revoked werden.
+  // If a token from a family is stolen, the entire family can be revoked.
   @Column({ type: 'varchar', length: 255, name: 'family_id', nullable: true })
   @Exclude()
   familyId: string | null;

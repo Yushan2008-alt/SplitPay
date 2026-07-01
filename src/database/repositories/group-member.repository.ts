@@ -35,6 +35,15 @@ export class GroupMemberRepository extends BaseRepository<GroupMemberEntity> {
     });
   }
 
+  async findByGroupAndEmail(
+    groupId: string,
+    email: string,
+  ): Promise<GroupMemberEntity | null> {
+    return this.repo.findOne({
+      where: { groupId, email: email.toLowerCase().trim(), status: MemberStatus.ACTIVE },
+    });
+  }
+
   async findByGroupAndUser(
     groupId: string,
     userId: string,

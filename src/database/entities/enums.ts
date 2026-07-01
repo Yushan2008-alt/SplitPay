@@ -64,7 +64,7 @@ export enum NotificationType {
 export enum NotificationChannel {
   EMAIL = 'email',
   PUSH = 'push',
-  SMS = 'sms',
+  WHATSAPP = 'whatsapp',
 }
 
 export enum NotificationStatus {

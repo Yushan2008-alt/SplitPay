@@ -8,11 +8,16 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { compareSync, hashSync } from 'bcryptjs';
 import { randomUUID } from 'crypto';
+import { generateOTP } from '../../common/utils/crypto.util.js';
 import { ErrorCode } from '../../common/constants/error-codes.js';
 import { UserEntity } from '../../database/entities/index.js';
 import { MemberRole } from '../../database/entities/enums.js';
-import { OtpCodeRepository } from '../../database/repositories/index.js';
+import {
+  GroupRepository,
+  OtpCodeRepository,
+} from '../../database/repositories/index.js';
 import { UsersService } from '../users/users.service.js';
+import { MailService } from './mail.service.js';
 import { RedisService } from './redis.service.js';
 import type { JwtPayload } from './interfaces/jwt-payload.interface.js';
 
@@ -28,19 +33,25 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly redisService: RedisService,
     private readonly otpRepo: OtpCodeRepository,
+    private readonly mailService: MailService,
+    private readonly groupRepo: GroupRepository,
   ) {
     this.otpExpiry = this.config.get<number>('OTP_EXPIRES_IN_SECONDS') ?? 300;
     this.otpMaxAttempts = this.config.get<number>('OTP_MAX_ATTEMPTS') ?? 5;
     this.otpCooldown = this.config.get<number>('OTP_COOLDOWN_SECONDS') ?? 60;
   }
 
-  async register(dto: { email: string; name: string; phone?: string }) {
+  async register(
+    dto: { email: string; name: string; phone?: string },
+    ip?: string,
+    userAgent?: string,
+  ) {
     const user = await this.usersService.create(dto.email, dto.name, dto.phone);
-    await this.generateAndStoreOtp(user.email);
+    await this.generateAndStoreOtp(user.email, ip, userAgent);
     return { message: 'Registrasi berhasil. Silakan cek email untuk OTP.' };
   }
 
-  async sendOtp(dto: { email: string }) {
+  async sendOtp(dto: { email: string }, ip?: string, userAgent?: string) {
     const email = dto.email.toLowerCase().trim();
     const user = await this.usersService.findByEmail(email);
     if (!user) {
@@ -52,11 +63,11 @@ export class AuthService {
 
     await this.checkCooldown(email);
     await this.invalidateOldOtps(email);
-    await this.generateAndStoreOtp(email);
+    await this.generateAndStoreOtp(email, ip, userAgent);
     return { message: 'OTP telah dikirim ke email Anda.' };
   }
 
-  async verifyOtp(dto: { email: string; otp: string }) {
+  async verifyOtp(dto: { email: string; otp: string }, ip?: string) {
     const email = dto.email.toLowerCase().trim();
     const user = await this.usersService.findByEmail(email);
     if (!user) {
@@ -75,8 +86,8 @@ export class AuthService {
       });
     }
 
+    await this.otpRepo.incrementAttempts(otpEntity.id);
     otpEntity.attempts += 1;
-    await this.otpRepo.update(otpEntity.id, { attempts: otpEntity.attempts });
 
     if (otpEntity.attempts > this.otpMaxAttempts) {
       await this.otpRepo.update(otpEntity.id, { isUsed: true });
@@ -105,7 +116,11 @@ export class AuthService {
     return tokens;
   }
 
-  async refreshToken(oldRefreshToken: string, payload: JwtPayload) {
+  async refreshToken(
+    oldRefreshToken: string,
+    payload: JwtPayload,
+    ip?: string,
+  ) {
     const blacklistKey = `blacklist:jti:${payload.jti}`;
     const expiresIn = payload.exp
       ? Math.max(1, Math.floor(payload.exp - Date.now() / 1000))
@@ -125,7 +140,7 @@ export class AuthService {
     return this.generateTokens(user);
   }
 
-  async logout(refreshToken: string, payload: JwtPayload) {
+  async logout(refreshToken: string, payload: JwtPayload, ip?: string) {
     const expiresIn = payload.exp
       ? Math.max(1, Math.floor(payload.exp - Date.now() / 1000))
       : 0;
@@ -150,18 +165,18 @@ export class AuthService {
     return user;
   }
 
-  async updateProfile(
-    userId: string,
-    dto: { name?: string; phone?: string },
-  ) {
+  async updateProfile(userId: string, dto: { name?: string; phone?: string }) {
     return this.usersService.update(userId, dto);
   }
 
   private async generateTokens(user: UserEntity) {
+    const hostedGroups = await this.groupRepo.findByHostId(user.id);
+    const role = hostedGroups.length > 0 ? MemberRole.HOST : MemberRole.PAYER;
+
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
-      role: MemberRole.PAYER,
+      role,
       jti: randomUUID(),
     };
 
@@ -170,14 +185,18 @@ export class AuthService {
         { ...payload, type: 'access' },
         {
           secret: this.config.get<string>('jwt.accessSecret'),
-          expiresIn: (this.config.get<string>('jwt.accessExpiresIn') ?? '15m') as any,
+          // ponytail: @nestjs/jwt v11 uses StringValue branded type — plain `string` won't compile
+expiresIn: (this.config.get<string>('jwt.accessExpiresIn') ??
+            '15m') as any,
         },
       ),
       this.jwtService.signAsync(
         { ...payload, type: 'refresh' },
         {
           secret: this.config.get<string>('jwt.refreshSecret'),
-          expiresIn: (this.config.get<string>('jwt.refreshExpiresIn') ?? '7d') as any,
+          // ponytail: @nestjs/jwt v11 uses StringValue branded type — plain `string` won't compile
+expiresIn: (this.config.get<string>('jwt.refreshExpiresIn') ??
+            '7d') as any,
         },
       ),
     ]);
@@ -185,7 +204,11 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private async generateAndStoreOtp(email: string): Promise<void> {
+  private async generateAndStoreOtp(
+    email: string,
+    ip?: string,
+    userAgent?: string,
+  ): Promise<void> {
     const otp = this.generateOtpCode();
     const codeHash = hashSync(otp, 10);
 
@@ -193,22 +216,26 @@ export class AuthService {
       console.log(`[DEV OTP] ${email}: ${otp}`);
     }
 
+    await this.mailService.sendOtpEmail(email, otp);
+
     await this.otpRepo.createEntity({
       email,
       codeHash,
       expiresAt: new Date(Date.now() + this.otpExpiry * 1000),
+      ipAddress: ip ?? null,
+      userAgent: userAgent ?? null,
     });
   }
 
   private generateOtpCode(): string {
-    const digits = 6;
-    const max = Math.pow(10, digits);
-    const code = Math.floor(Math.random() * max);
-    return String(code).padStart(digits, '0');
+    return generateOTP(6);
   }
 
   private async checkCooldown(email: string): Promise<void> {
-    const recentOtp = await this.otpRepo.findRecentByEmail(email, this.otpCooldown);
+    const recentOtp = await this.otpRepo.findRecentByEmail(
+      email,
+      this.otpCooldown,
+    );
 
     if (recentOtp) {
       throw new BadRequestException({

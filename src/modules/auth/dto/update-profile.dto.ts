@@ -1,4 +1,4 @@
-import { IsOptional, IsString, Length, MaxLength } from 'class-validator';
+import { IsOptional, IsString, Length, Matches } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -8,6 +8,8 @@ export class UpdateProfileDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(20, { message: 'Nomor telepon maksimal 20 karakter' })
+  @Matches(/^(\+62|0)8\d{7,11}$/, {
+    message: 'Nomor telepon harus diawali +62 atau 08 (10-15 digit)',
+  })
   phone?: string;
 }

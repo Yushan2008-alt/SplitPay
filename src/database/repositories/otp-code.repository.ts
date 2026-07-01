@@ -55,6 +55,9 @@ export class OtpCodeRepository extends BaseRepository<OtpCodeEntity> {
     await this.repo.increment({ id }, 'attempts', 1);
   }
 
+  /* ponytail: cleanExpired is defined but never scheduled. It should be
+     called by a cron/scheduler every N minutes to purge expired+used OTP
+     rows. Until then the table grows unbounded (acceptable at low volume). */
   async cleanExpired(): Promise<number> {
     const result = await this.repo.delete({
       expiresAt: LessThan(new Date()),

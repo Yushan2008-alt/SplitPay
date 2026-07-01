@@ -14,6 +14,13 @@ export class PaymentRecordRepository extends BaseRepository<PaymentRecordEntity>
     super(repo);
   }
 
+  async findPendingByPeriodId(periodId: string): Promise<PaymentRecordEntity[]> {
+    return this.repo.find({
+      where: { periodId, status: PaymentStatus.PENDING },
+      relations: { member: { user: true } },
+    });
+  }
+
   async findByPeriodId(periodId: string): Promise<PaymentRecordEntity[]> {
     return this.repo.find({
       where: { periodId },

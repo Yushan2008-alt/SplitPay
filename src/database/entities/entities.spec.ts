@@ -119,7 +119,7 @@ describe('Enums', () => {
   it('NotificationChannel has correct values', () => {
     expect(NotificationChannel.EMAIL).toBe('email');
     expect(NotificationChannel.PUSH).toBe('push');
-    expect(NotificationChannel.SMS).toBe('sms');
+    expect(NotificationChannel.WHATSAPP).toBe('whatsapp');
   });
 
   it('NotificationStatus has correct values', () => {
@@ -217,9 +217,10 @@ describe('OtpCodeEntity', () => {
     expect(cols).toContain('isUsed');
     expect(cols).toContain('attempts');
     expect(cols).toContain('ipAddress');
+    expect(cols).toContain('userAgent');
   });
 
-  it('should exclude codeHash and ipAddress from serialization', () => {
+  it('should exclude codeHash, ipAddress, and userAgent from serialization', () => {
     const entity = Object.assign(new OtpCodeEntity(), {
       id: 'uuid-2',
       email: 'test@test.com',
@@ -228,12 +229,14 @@ describe('OtpCodeEntity', () => {
       isUsed: false,
       attempts: 0,
       ipAddress: '127.0.0.1',
+      userAgent: 'Mozilla/5.0',
       createdAt: new Date(),
       updatedAt: new Date(),
     });
     const plain = instanceToPlain(entity);
     expect(plain).not.toHaveProperty('codeHash');
     expect(plain).not.toHaveProperty('ipAddress');
+    expect(plain).not.toHaveProperty('userAgent');
     expect(plain).toHaveProperty('email', 'test@test.com');
     expect(plain).toHaveProperty('attempts', 0);
   });

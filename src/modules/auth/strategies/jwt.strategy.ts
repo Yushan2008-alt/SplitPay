@@ -34,6 +34,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       }
     } catch (err: unknown) {
       if (err instanceof UnauthorizedException) throw err;
+      /* ponytail: Redis fail-open — when Redis is down we skip blacklist
+         check to avoid full auth outage. Upgrade path: add a circuit-breaker
+         or a local deny-list for recently-revoked tokens. */
       this.logger.warn(`Redis unreachable, skipping blacklist check: ${(err as Error).message}`);
     }
 

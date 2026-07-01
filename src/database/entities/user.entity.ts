@@ -18,6 +18,7 @@ export class UserEntity extends SoftDeleteBaseEntity {
   name: string;
 
   // [SECURITY] Nomor telepon dienkripsi di level aplikasi sebelum disimpan
+  @Exclude()
   @Column({ type: 'varchar', length: 255, name: 'phone', nullable: true })
   phone: string | null;
 

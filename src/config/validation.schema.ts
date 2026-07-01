@@ -23,6 +23,10 @@ export const validationSchema = Joi.object({
   SIGNED_URL_SECRET: Joi.string().min(64).required(),
   SIGNED_URL_EXPIRES_IN_HOURS: Joi.number().integer().positive().default(72),
 
+  SMTP_HOST: Joi.string().allow('').optional(),
+  SMTP_PORT: Joi.number().port().default(587),
+  SMTP_USER: Joi.string().allow('').optional(),
+  SMTP_PASS: Joi.string().allow('').optional(),
   RESEND_API_KEY: Joi.string().allow('').optional(),
   RESEND_FROM_EMAIL: Joi.string().email().optional(),
   MAIL_FROM: Joi.string().email().optional(),

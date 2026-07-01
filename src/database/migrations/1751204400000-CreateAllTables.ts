@@ -105,7 +105,7 @@ export class CreateAllTables1751204400000 implements MigrationInterface {
     await queryRunner.query(`
       DO $$ BEGIN
         CREATE TYPE "public"."notification_channel_enum" AS ENUM (
-          'email', 'push', 'sms'
+          'email', 'push', 'whatsapp'
         );
       EXCEPTION WHEN duplicate_object THEN null; END $$
     `);

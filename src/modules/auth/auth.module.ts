@@ -6,9 +6,11 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import Redis from 'ioredis';
 import { OtpCodeEntity, RefreshTokenEntity } from '../../database/entities/index.js';
 import { OtpCodeRepository } from '../../database/repositories/index.js';
+import { GroupsModule } from '../groups/groups.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { MailService } from './mail.service.js';
 import { RedisService } from './redis.service.js';
 import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
@@ -21,16 +23,19 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
       useFactory: (config: ConfigService) => ({
         secret: config.getOrThrow<string>('jwt.accessSecret'),
         signOptions: {
-          expiresIn: (config.get<string>('jwt.accessExpiresIn') ?? '15m') as any,
+          // ponytail: @nestjs/jwt v11 uses StringValue branded type — plain `string` won't compile
+expiresIn: (config.get<string>('jwt.accessExpiresIn') ?? '15m') as any,
         },
       }),
     }),
     TypeOrmModule.forFeature([OtpCodeEntity, RefreshTokenEntity]),
     UsersModule,
+    GroupsModule,
   ],
   controllers: [AuthController],
   providers: [
     AuthService,
+    MailService,
     RedisService,
     OtpCodeRepository,
     {

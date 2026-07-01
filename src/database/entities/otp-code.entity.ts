@@ -29,4 +29,9 @@ export class OtpCodeEntity extends BaseEntity {
   @Column({ type: 'inet', name: 'ip_address', nullable: true })
   @Exclude()
   ipAddress: string | null;
+
+  // [SECURITY] Track user-agent untuk deteksi anomali
+  @Column({ type: 'text', name: 'user_agent', nullable: true })
+  @Exclude()
+  userAgent: string | null;
 }
