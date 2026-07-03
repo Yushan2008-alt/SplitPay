@@ -135,6 +135,26 @@ export class PaymentsController {
     return this.paymentsService.waivePayment(recordId, hostUserId);
   }
 
+  // ─── GATEWAY PAYMENT LINK ──────────────────────────────────────────────────
+
+  @Post('records/:recordId/gateway-link')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Create payment gateway link',
+    description:
+      'Membuat link pembayaran via Midtrans/Xendit. ' +
+      'Hanya untuk payment record dengan status PENDING.',
+  })
+  @ApiResponse({ status: 200, description: 'Gateway link berhasil dibuat' })
+  @ApiForbiddenResponse({ description: 'Bukan host atau pemilik record ini' })
+  @ApiNotFoundResponse({ description: 'Payment record tidak ditemukan' })
+  async createGatewayLink(
+    @Param('recordId', ParseUUIDPipe) recordId: string,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.paymentsService.createGatewayPaymentLink(recordId, userId);
+  }
+
   // ─── PERIOD HISTORY ───────────────────────────────────────────────────────
 
   @Get('groups/:groupId/periods')

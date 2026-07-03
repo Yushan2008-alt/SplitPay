@@ -18,6 +18,10 @@ export class AddPaymentGatewayAndWebhookSupport1751700000000
     `);
 
     await queryRunner.query(`
+      ALTER TABLE "payment_records"
+      ALTER COLUMN "status" DROP DEFAULT
+    `);
+    await queryRunner.query(`
       ALTER TYPE "public"."payment_status_enum" RENAME TO "payment_status_enum_old"
     `);
     await queryRunner.query(`
@@ -44,6 +48,10 @@ export class AddPaymentGatewayAndWebhookSupport1751700000000
         END
       )::"public"."payment_status_enum"
     `);
+    await queryRunner.query(`
+      ALTER TABLE "payment_records"
+      ALTER COLUMN "status" SET DEFAULT 'pending'
+    `);
     await queryRunner.query(`DROP TYPE "public"."payment_status_enum_old"`);
 
     await queryRunner.query(`
@@ -59,6 +67,23 @@ export class AddPaymentGatewayAndWebhookSupport1751700000000
       ALTER TABLE "payment_records"
       DROP CONSTRAINT IF EXISTS "payment_records_confirmed_by_check"
     `);
+
+    await queryRunner.query(`
+      UPDATE "payment_records"
+      SET "confirmed_by" = 'MEMBER_SELF_REPORT'
+      WHERE "confirmed_by" = 'self'
+    `);
+    await queryRunner.query(`
+      UPDATE "payment_records"
+      SET "confirmed_by" = 'HOST_MANUAL'
+      WHERE "confirmed_by" = 'host'
+    `);
+    await queryRunner.query(`
+      UPDATE "payment_records"
+      SET "confirmed_by" = 'SYSTEM_WEBHOOK'
+      WHERE "confirmed_by" = 'webhook'
+    `);
+
     await queryRunner.query(`
       ALTER TABLE "payment_records"
       ADD CONSTRAINT "payment_records_confirmed_by_check"

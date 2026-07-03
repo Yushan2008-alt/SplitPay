@@ -18,6 +18,7 @@ import { NotificationsService } from '../notifications/notifications.service.js'
 import { PaymentGatewayFactory } from '../payment-gateway/payment-gateway.factory.js';
 import { generateSignedToken } from '../../common/utils/crypto.util.js';
 import {
+  GatewayProvider,
   PaymentStatus,
   PaymentConfirmationSource,
   MemberRole,
@@ -39,6 +40,7 @@ describe('PaymentsService', () => {
   let redisService: jest.Mocked<RedisService>;
   let userRepo: jest.Mocked<UserRepository>;
   let notificationsService: jest.Mocked<NotificationsService>;
+  let gatewayFactory: jest.Mocked<PaymentGatewayFactory>;
 
   const mockRecord: Partial<PaymentRecordEntity> = {
     id: 'record-123',
@@ -153,6 +155,7 @@ describe('PaymentsService', () => {
     redisService = module.get(RedisService);
     userRepo = module.get(UserRepository);
     notificationsService = module.get(NotificationsService);
+    gatewayFactory = module.get(PaymentGatewayFactory);
   });
 
   describe('confirmPayment', () => {
@@ -411,6 +414,207 @@ describe('PaymentsService', () => {
 
       const result = await service.getPeriods('group-123', 'host-123');
       expect(result).toHaveLength(1);
+    });
+  });
+
+  describe('createGatewayPaymentLink', () => {
+    it('should throw NotFoundException if record not found', async () => {
+      recordRepo.findById.mockResolvedValue(null);
+      await expect(
+        service.createGatewayPaymentLink('rec-xxx', 'user-123'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should create payment link and transition to AWAITING_GATEWAY', async () => {
+      const mockGatewayInstance = {
+        provider: GatewayProvider.MIDTRANS,
+        createPaymentLink: jest.fn().mockResolvedValue({
+          checkoutUrl: 'https://checkout.url',
+          qrisString: null,
+          gatewayReferenceId: 'ref-123',
+          expiresAt: '2026-07-04T00:00:00Z',
+        }),
+        verifyWebhookSignature: jest.fn(),
+        parseWebhookPayload: jest.fn(),
+      };
+
+      recordRepo.findById.mockResolvedValue(mockRecord as any);
+      memberRepo.findById.mockResolvedValue(mockMember as any);
+      groupRepo.findById.mockResolvedValue(mockGroup as any);
+      recordRepo.update.mockResolvedValue({
+        ...mockRecord,
+        status: PaymentStatus.AWAITING_GATEWAY,
+      } as any);
+      gatewayFactory.getGateway = jest.fn().mockReturnValue(mockGatewayInstance);
+
+      const result = await service.createGatewayPaymentLink('record-123', 'user-123');
+      expect(result.checkoutUrl).toBe('https://checkout.url');
+      expect(result.provider).toBe(GatewayProvider.MIDTRANS);
+      expect(recordRepo.update).toHaveBeenCalledWith(
+        'record-123',
+        expect.objectContaining({
+          status: PaymentStatus.AWAITING_GATEWAY,
+          gatewayProvider: GatewayProvider.MIDTRANS,
+          gatewayReferenceId: 'ref-123',
+        }),
+      );
+    });
+
+    it('should throw ConflictException for invalid state transition', async () => {
+      const paidRecord = { ...mockRecord, status: PaymentStatus.PAID } as PaymentRecordEntity;
+      const mockGatewayInstance2 = {
+        provider: GatewayProvider.MIDTRANS,
+        createPaymentLink: jest.fn().mockResolvedValue({
+          checkoutUrl: 'https://checkout.url',
+          qrisString: null,
+          gatewayReferenceId: 'ref-123',
+          expiresAt: '2026-07-04T00:00:00Z',
+        }),
+      };
+      recordRepo.findById.mockResolvedValue(paidRecord);
+      memberRepo.findById.mockResolvedValue(mockMember as any);
+      groupRepo.findById.mockResolvedValue(mockGroup as any);
+      gatewayFactory.getGateway = jest.fn().mockReturnValue(mockGatewayInstance2);
+
+      await expect(
+        service.createGatewayPaymentLink('record-123', 'user-123'),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('confirmManual', () => {
+    it('should throw ForbiddenException if confirming another member', async () => {
+      memberRepo.findById.mockResolvedValue({
+        ...mockMember,
+        userId: 'other-user',
+      } as any);
+
+      await expect(
+        service.confirmManual('period-123', 'member-123', 'user-123'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should transition PENDING to PENDING_HOST_REVIEW', async () => {
+      memberRepo.findById.mockResolvedValue(mockMember as any);
+      recordRepo.findByPeriodAndMember.mockResolvedValue(mockRecord as any);
+      recordRepo.update.mockResolvedValue({
+        ...mockRecord,
+        status: PaymentStatus.PENDING_HOST_REVIEW,
+      } as any);
+
+      const result = await service.confirmManual('period-123', 'member-123', 'user-123');
+      expect(recordRepo.update).toHaveBeenCalledWith(
+        'record-123',
+        expect.objectContaining({
+          status: PaymentStatus.PENDING_HOST_REVIEW,
+          confirmedBy: PaymentConfirmationSource.MEMBER_SELF_REPORT,
+        }),
+      );
+    });
+
+    it('should throw ConflictException for invalid state transition', async () => {
+      const paidRecord = { ...mockRecord, status: PaymentStatus.PAID } as PaymentRecordEntity;
+      memberRepo.findById.mockResolvedValue(mockMember as any);
+      recordRepo.findByPeriodAndMember.mockResolvedValue(paidRecord);
+
+      await expect(
+        service.confirmManual('period-123', 'member-123', 'user-123'),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('reviewPayment', () => {
+    it('should throw BadRequestException for invalid action', async () => {
+      await expect(
+        (service as any).reviewPayment('record-123', 'host-123', 'invalid'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should approve PENDING_HOST_REVIEW to PAID', async () => {
+      const pendingReviewRecord = {
+        ...mockRecord,
+        status: PaymentStatus.PENDING_HOST_REVIEW,
+      } as PaymentRecordEntity;
+
+      recordRepo.findById.mockResolvedValue(pendingReviewRecord);
+      memberRepo.findById.mockResolvedValue(mockMember as any);
+      groupRepo.findById.mockResolvedValue(mockGroup as any);
+      recordRepo.update.mockResolvedValue({
+        ...pendingReviewRecord,
+        status: PaymentStatus.PAID,
+      } as any);
+
+      const result = await service.reviewPayment('record-123', 'host-123', 'approve');
+      expect(recordRepo.update).toHaveBeenCalledWith(
+        'record-123',
+        expect.objectContaining({ status: PaymentStatus.PAID }),
+      );
+      expect(billingService.updateCycleStatus).toHaveBeenCalledWith('period-123');
+    });
+
+    it('should reject PENDING_HOST_REVIEW back to PENDING', async () => {
+      const pendingReviewRecord = {
+        ...mockRecord,
+        status: PaymentStatus.PENDING_HOST_REVIEW,
+      } as PaymentRecordEntity;
+
+      recordRepo.findById.mockResolvedValue(pendingReviewRecord);
+      memberRepo.findById.mockResolvedValue(mockMember as any);
+      groupRepo.findById.mockResolvedValue(mockGroup as any);
+      recordRepo.update.mockResolvedValue({
+        ...pendingReviewRecord,
+        status: PaymentStatus.PENDING,
+      } as any);
+
+      const result = await service.reviewPayment('record-123', 'host-123', 'reject');
+      expect(recordRepo.update).toHaveBeenCalledWith(
+        'record-123',
+        expect.objectContaining({ status: PaymentStatus.PENDING }),
+      );
+      expect(billingService.updateCycleStatus).not.toHaveBeenCalled();
+    });
+
+    it('should throw ConflictException for invalid review transition', async () => {
+      const refundedRecord = { ...mockRecord, status: PaymentStatus.REFUNDED } as PaymentRecordEntity;
+      recordRepo.findById.mockResolvedValue(refundedRecord);
+      memberRepo.findById.mockResolvedValue(mockMember as any);
+      groupRepo.findById.mockResolvedValue(mockGroup as any);
+
+      await expect(
+        service.reviewPayment('record-123', 'host-123', 'approve'),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('getPaymentHistory', () => {
+    it('should return payment records for user memberships', async () => {
+      const records = [
+        { id: 'rec-1', memberId: 'member-123', status: PaymentStatus.PAID },
+        { id: 'rec-2', memberId: 'member-123', status: PaymentStatus.PENDING },
+      ];
+
+      memberRepo.findByUserId.mockResolvedValue([mockMember] as any);
+      recordRepo.findHistoryByMemberAndFilters.mockResolvedValue(records as any);
+
+      const result = await service.getPaymentHistory('user-123');
+      expect(result).toHaveLength(2);
+      expect(recordRepo.findHistoryByMemberAndFilters).toHaveBeenCalledWith(
+        'member-123',
+        undefined,
+        undefined,
+      );
+    });
+
+    it('should filter by status and groupId', async () => {
+      memberRepo.findByUserId.mockResolvedValue([mockMember] as any);
+      recordRepo.findHistoryByMemberAndFilters.mockResolvedValue([] as any);
+
+      await service.getPaymentHistory('user-123', PaymentStatus.PENDING, 'group-456');
+      expect(recordRepo.findHistoryByMemberAndFilters).toHaveBeenCalledWith(
+        'member-123',
+        PaymentStatus.PENDING,
+        'group-456',
+      );
     });
   });
 
