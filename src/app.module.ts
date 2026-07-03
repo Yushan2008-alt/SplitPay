@@ -13,6 +13,7 @@ import mailConfig from './config/mail.config';
 import redisConfig from './config/redis.config';
 import { validationSchema } from './config/validation.schema';
 import { AuthModule } from './modules/auth/auth.module';
+import { CacheModule } from './modules/cache/cache.module.js';
 import { GroupsModule } from './modules/groups/groups.module';
 import { MembersModule } from './modules/members/members.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -65,6 +66,7 @@ const infrastructureModules =
       },
     ]),
     ...infrastructureModules,
+    CacheModule,
     AuthModule,
     UsersModule,
     GroupsModule,

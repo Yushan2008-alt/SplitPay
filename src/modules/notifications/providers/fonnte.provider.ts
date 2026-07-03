@@ -32,6 +32,12 @@ export class FonnteProvider {
    * @param message - Plain text message content
    * @returns Success/failure status
    */
+  // ponytail: mask PII in logs — show prefix + last 4 digits only
+  private maskPhone(phone: string): string {
+    if (phone.length <= 4) return '****';
+    return `${phone.slice(0, 2)}xx****${phone.slice(-4)}`;
+  }
+
   async sendWhatsApp(
     phone: string,
     message: string,
@@ -39,7 +45,7 @@ export class FonnteProvider {
     // Graceful degradation: log if no token
     if (!this.token) {
       this.logger.log(
-        `[DEV MODE] WhatsApp to ${phone}: [Message content not logged for privacy]`,
+        `[DEV MODE] WhatsApp to ${this.maskPhone(phone)}: [Message content not logged for privacy]`,
       );
       return { success: true, messageId: 'dev-mode-no-send' };
     }
@@ -63,9 +69,9 @@ export class FonnteProvider {
         },
       );
 
-      // ponytail: JANGAN log message content untuk privacy
+      // ponytail: JANGAN log message content atau full phone untuk privacy
       this.logger.log(
-        `WhatsApp sent successfully to ${normalizedPhone}: ${response.data.status || 'OK'}`,
+        `WhatsApp sent successfully to ${this.maskPhone(normalizedPhone)}: ${response.data.status || 'OK'}`,
       );
 
       return {
@@ -78,9 +84,9 @@ export class FonnteProvider {
         ? JSON.stringify(axiosError.response.data)
         : axiosError.message;
 
-      // ponytail: Log error but NOT message content
+      // ponytail: Log error but NOT message content or full phone
       this.logger.error(
-        `WhatsApp send failed to ${normalizedPhone}: ${errorMessage}`,
+        `WhatsApp send failed to ${this.maskPhone(normalizedPhone)}: ${errorMessage}`,
       );
 
       return {

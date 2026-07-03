@@ -32,10 +32,16 @@ export class MailService {
       config.get<string>('MAIL_FROM') ?? 'noreply@splitpay.id';
   }
 
+  // ponytail: mask PII in logs — show first char + domain only
+  private maskEmail(email: string): string {
+    const [local, domain] = email.split('@');
+    return `${local[0]}***@${domain}`;
+  }
+
   async sendOtpEmail(email: string, otp: string): Promise<void> {
     if (!this.transporter) {
       this.logger.log(
-        `[DEV] No SMTP config — skipping email to ${email}. OTP: ${otp}`,
+        `[DEV] No SMTP config — skipping email to ${this.maskEmail(email)}`,
       );
       return;
     }
@@ -49,7 +55,7 @@ export class MailService {
       });
     } catch (err) {
       this.logger.warn(
-        `Email error for ${email}: ${(err as Error).message}`,
+        `Email error for ${this.maskEmail(email)}: ${(err as Error).message}`,
       );
       /* ponytail: email failure is non-fatal — OTP is stored in DB and
          printed to console in dev. In production, add a retry queue if

@@ -17,7 +17,8 @@ export class MidtransGatewayService implements PaymentGatewayService {
   constructor(private readonly config: ConfigService) {}
 
   async createPaymentLink(input: CreatePaymentLinkInput): Promise<PaymentLinkResult> {
-    const serverKey = this.config.get<string>('MIDTRANS_SERVER_KEY') ?? '';
+    const serverKey = this.config.get<string>('MIDTRANS_SERVER_KEY');
+    if (!serverKey) throw new Error('MIDTRANS_SERVER_KEY not configured');
     const isProd = this.config.get<boolean>('MIDTRANS_IS_PRODUCTION') ?? false;
     const expiresAt = new Date(Date.now() + input.expiresInMinutes * 60_000);
 

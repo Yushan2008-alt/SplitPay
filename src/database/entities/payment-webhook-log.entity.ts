@@ -1,4 +1,5 @@
 import { Column, Entity } from 'typeorm';
+import { Exclude } from 'class-transformer';
 import { BaseEntity } from './base.entity.js';
 import { GatewayProvider } from './enums.js';
 
@@ -14,6 +15,8 @@ export class PaymentWebhookLogEntity extends BaseEntity {
   @Column({ type: 'varchar', length: 100, name: 'event_type' })
   eventType: string;
 
+  // [SECURITY] Raw gateway payload — never expose via API
+  @Exclude()
   @Column({ type: 'jsonb', name: 'payload' })
   payload: Record<string, unknown>;
 

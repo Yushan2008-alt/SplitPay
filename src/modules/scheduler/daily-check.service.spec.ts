@@ -266,7 +266,7 @@ describe('DailyCheckService', () => {
       await service.markOverdueAndAlert();
 
       expect(paymentRepo.findByStatusWithRelations).toHaveBeenCalledWith(PaymentStatus.PENDING);
-      expect(paymentRepo.update).toHaveBeenCalledWith('payment-1', { status: PaymentStatus.FAILED });
+      expect(paymentRepo.update).toHaveBeenCalledWith('payment-1', { status: PaymentStatus.EXPIRED });
       expect(emailQueue.add).toHaveBeenCalledWith(
         NotificationJobType.OVERDUE_ALERT,
         expect.objectContaining({

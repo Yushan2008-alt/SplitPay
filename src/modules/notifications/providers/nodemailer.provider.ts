@@ -36,6 +36,12 @@ export class NodemailerProvider {
       'noreply@splitpay.id';
   }
 
+  // ponytail: mask PII in logs — show first char + domain only
+  private maskEmail(email: string): string {
+    const [local, domain] = email.split('@');
+    return `${local[0]}***@${domain}`;
+  }
+
   async sendEmail(params: {
     to: string;
     subject: string;
@@ -45,7 +51,7 @@ export class NodemailerProvider {
 
     if (!this.transporter) {
       this.logger.log(
-        `[DEV MODE] Email to ${to}: ${subject}\n(Set SMTP_HOST/SMTP_USER/SMTP_PASS to actually send)`,
+        `[DEV MODE] Email to ${this.maskEmail(to)}: ${subject}\n(Set SMTP_HOST/SMTP_USER/SMTP_PASS to actually send)`,
       );
       return { success: true, messageId: 'dev-mode-no-send' };
     }
@@ -58,11 +64,11 @@ export class NodemailerProvider {
         html,
       });
 
-      this.logger.log(`Email sent successfully to ${to}: ${info.messageId}`);
+      this.logger.log(`Email sent successfully to ${this.maskEmail(to)}: ${info.messageId}`);
       return { success: true, messageId: info.messageId };
     } catch (err) {
       const errorMessage = (err as Error).message;
-      this.logger.error(`Email send failed for ${to}: ${errorMessage}`, err);
+      this.logger.error(`Email send failed for ${this.maskEmail(to)}: ${errorMessage}`, err);
       return { success: false, error: errorMessage };
     }
   }

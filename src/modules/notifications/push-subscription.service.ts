@@ -60,7 +60,7 @@ export class PushSubscriptionService {
 
     if (!subscription) {
       throw new NotFoundException({
-        code: ErrorCode.PERIOD_NOT_FOUND,
+        code: ErrorCode.PUSH_SUBSCRIPTION_NOT_FOUND,
         message: 'Push subscription tidak ditemukan',
       });
     }

@@ -16,7 +16,8 @@ export class XenditGatewayService implements PaymentGatewayService {
   constructor(private readonly config: ConfigService) {}
 
   async createPaymentLink(input: CreatePaymentLinkInput): Promise<PaymentLinkResult> {
-    const apiKey = this.config.get<string>('XENDIT_SECRET_KEY') ?? '';
+    const apiKey = this.config.get<string>('XENDIT_SECRET_KEY');
+    if (!apiKey) throw new Error('XENDIT_SECRET_KEY not configured');
     const expiresAt = new Date(Date.now() + input.expiresInMinutes * 60_000);
 
     const resp = await axios.post(

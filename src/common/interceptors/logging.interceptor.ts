@@ -30,6 +30,20 @@ function maskSensitive(obj: unknown): unknown {
   return result;
 }
 
+function jsonLog(level: string, context: string, message: string, extra: Record<string, unknown> = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    context,
+    message,
+    ...extra,
+  };
+  if (process.env.NODE_ENV === 'production') {
+    process.stdout.write(JSON.stringify(entry) + '\n');
+  }
+  return entry;
+}
+
 @Injectable()
 export class LoggingInterceptor implements NestInterceptor {
   private readonly logger = new Logger('HTTP');
@@ -39,6 +53,7 @@ export class LoggingInterceptor implements NestInterceptor {
     const method = req.method;
     const url = req.url;
     const body: unknown = req.body;
+    const requestId = (req as any).requestId;
     const start = Date.now();
 
     if (
@@ -57,11 +72,21 @@ export class LoggingInterceptor implements NestInterceptor {
         next: () => {
           const res = context.switchToHttp().getResponse<Response>();
           const ms = Date.now() - start;
-          this.logger.log(`${method} ${url} ${res.statusCode} — ${ms}ms`);
+          const msg = `${method} ${url} ${res.statusCode} — ${ms}ms`;
+          if (process.env.NODE_ENV === 'production') {
+            jsonLog('info', 'HTTP', msg, { method, url, statusCode: res.statusCode, durationMs: ms, requestId });
+          } else {
+            this.logger.log(msg);
+          }
         },
         error: (err: unknown) => {
           const ms = Date.now() - start;
-          this.logger.warn(`${method} ${url} ERROR — ${ms}ms — ${String(err)}`);
+          const msg = `${method} ${url} ERROR — ${ms}ms — ${String(err)}`;
+          if (process.env.NODE_ENV === 'production') {
+            jsonLog('warn', 'HTTP', msg, { method, url, durationMs: ms, error: String(err), requestId });
+          } else {
+            this.logger.warn(msg);
+          }
         },
       }),
     );

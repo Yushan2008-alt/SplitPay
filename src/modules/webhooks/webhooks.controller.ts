@@ -1,4 +1,5 @@
-import { Body, Controller, Headers, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, HttpStatus, Logger, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Public } from '../../common/decorators/public.decorator.js';
@@ -9,6 +10,8 @@ import { WebhooksService } from './webhooks.service.js';
 
 @Controller('webhooks')
 export class WebhooksController {
+  private readonly logger = new Logger(WebhooksController.name);
+
   constructor(
     private readonly webhooksService: WebhooksService,
     private readonly gatewayFactory: PaymentGatewayFactory,
@@ -17,6 +20,7 @@ export class WebhooksController {
 
   @Post('midtrans')
   @Public()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async handleMidtrans(
     @Headers() headers: Record<string, string | string[] | undefined>,
@@ -31,6 +35,7 @@ export class WebhooksController {
 
   @Post('xendit')
   @Public()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async handleXendit(
     @Headers() headers: Record<string, string | string[] | undefined>,
@@ -52,6 +57,7 @@ export class WebhooksController {
       paymentProvider: provider,
     } as any);
     const signatureValid = gateway.verifyWebhookSignature(headers, rawBody);
+    this.logger.log(`Webhook received from ${provider}: signature_valid=${signatureValid}`);
     const payload = this.safeJson(rawBody);
 
     const webhookLog = await this.webhooksService.logIncomingWebhook({

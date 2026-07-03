@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '09:00'
+      timezone: 'Asia/Jakarta'
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    labels:
+      - 'dependencies'
+      - 'security'
+    commit-message:
+      prefix: 'chore'
+      prefix-development: 'chore'
+      include: 'scope'
+    groups:
+      nestjs:
+        patterns:
+          - '@nestjs/*'
+        update-types:
+          - 'minor'
+          - 'patch'
+      typeorm:
+        patterns:
+          - 'typeorm'
+          - '@nestjs/typeorm'
+        update-types:
+          - 'minor'
+          - 'patch'
+    ignore:
+      - dependency-name: '@nestjs/bullmq'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'bullmq'
+        update-types: ['version-update:semver-major']

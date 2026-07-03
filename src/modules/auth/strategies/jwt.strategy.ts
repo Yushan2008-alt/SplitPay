@@ -27,9 +27,10 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     try {
       const blacklisted = await this.redisService.get(`blacklist:jti:${payload.jti}`);
       if (blacklisted) {
+        // ponytail: don't distinguish revoked vs expired — same message prevents enumeration
         throw new UnauthorizedException({
           code: ErrorCode.UNAUTHORIZED,
-          message: 'Token telah dinonaktifkan',
+          message: 'Token tidak valid atau kadaluarsa',
         });
       }
     } catch (err: unknown) {
@@ -44,7 +45,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     if (!user) {
       throw new UnauthorizedException({
         code: ErrorCode.UNAUTHORIZED,
-        message: 'Autentikasi diperlukan',
+        message: 'Token tidak valid atau kadaluarsa',
       });
     }
 

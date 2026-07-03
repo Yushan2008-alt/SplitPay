@@ -11,6 +11,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import {
   ApiBadRequestResponse,
@@ -20,6 +21,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
@@ -42,6 +44,7 @@ export class PaymentsController {
 
   @Post('confirm')
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Confirm payment via signed URL token',
@@ -67,6 +70,7 @@ export class PaymentsController {
    */
   @Get('confirm')
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({
     summary: 'Confirm payment via GET (redirect from email)',
     description: 'Endpoint untuk link email, redirect ke frontend setelah proses.',

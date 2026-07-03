@@ -23,6 +23,7 @@ import {
   GroupRepository,
   PaymentPeriodRepository,
 } from '../../database/repositories/index.js';
+import { CacheService } from '../cache/cache.service.js';
 import { UsersService } from '../users/users.service.js';
 import { BillingCycleService } from '../billing/billing-cycle.service.js';
 import type { CreateGroupDto } from './dto/create-group.dto.js';
@@ -32,10 +33,13 @@ const MAX_MEMBERS = 20;
 
 @Injectable()
 export class GroupsService {
+  private readonly logger = new Logger(GroupsService.name);
+
   constructor(
     private readonly groupRepo: GroupRepository,
     private readonly memberRepo: GroupMemberRepository,
     private readonly periodRepo: PaymentPeriodRepository,
+    private readonly cacheService: CacheService,
     private readonly usersService: UsersService,
     private readonly billingService: BillingCycleService,
   ) {}
@@ -88,17 +92,31 @@ export class GroupsService {
       await this.billingService.generateNextCycle(group.id);
     } catch (err) {
       // ponytail: non-fatal — group created, scheduler retries later
-      new Logger(GroupsService.name).warn(
+      this.logger.warn(
         `Failed to generate first billing cycle for group ${group.id}: ${(err as Error).message}`,
       );
     }
 
+    await this.cacheService.del(`cache:user:${hostUserId}:groups`);
     return group;
   }
 
   // ─── LIST ─────────────────────────────────────────────────────────────────
 
   async listMyGroups(userId: string): Promise<
+    Array<{
+      group: GroupEntity;
+      myRole: MemberRole;
+      memberCount: number;
+      nextDueDate: string | null;
+    }>
+  > {
+    return this.cacheService.getOrSet(`cache:user:${userId}:groups`, 60, () =>
+      this.fetchMyGroups(userId),
+    );
+  }
+
+  private async fetchMyGroups(userId: string): Promise<
     Array<{
       group: GroupEntity;
       myRole: MemberRole;
@@ -173,14 +191,10 @@ export class GroupsService {
     myRole: MemberRole;
   }> {
     const group = await this.groupRepo.findById(groupId);
-    if (!group) {
-      throw new NotFoundException({
-        code: ErrorCode.GROUP_NOT_FOUND,
-        message: 'Grup tidak ditemukan',
-      });
-    }
-
+    // ponytail: assertGroupMembership returns 403 for not-found + not-member — prevents group ID enumeration
+    // group! — assertGroupMembership throws if null, so group is definitely defined here
     await this.assertGroupMembership(groupId, userId);
+    const g = group!;
 
     const [members, currentPeriod, membership] = await Promise.all([
       this.memberRepo.findActiveByGroup(groupId),
@@ -189,11 +203,11 @@ export class GroupsService {
     ]);
 
     const myRole =
-      group.hostId === userId
+      g.hostId === userId
         ? MemberRole.HOST
         : (membership?.role ?? MemberRole.PAYER);
 
-    return { group, members, currentPeriod, myRole };
+    return { group: g, members, currentPeriod, myRole };
   }
 
   // ─── UPDATE ───────────────────────────────────────────────────────────────
@@ -239,7 +253,9 @@ export class GroupsService {
       updateData.gracePeriodDays = dto.gracePeriodDays;
     if (dto.status) updateData.status = dto.status as GroupStatus;
 
-    return this.groupRepo.update(groupId, updateData);
+    const updated = await this.groupRepo.update(groupId, updateData);
+    await this.cacheService.del(`cache:user:${hostUserId}:groups`);
+    return updated;
   }
 
   // ─── DELETE ───────────────────────────────────────────────────────────────
@@ -255,6 +271,7 @@ export class GroupsService {
       });
     }
     await this.groupRepo.softDelete(groupId);
+    await this.cacheService.del(`cache:user:${hostUserId}:groups`);
   }
 
   // ─── GUARD HELPERS ────────────────────────────────────────────────────────

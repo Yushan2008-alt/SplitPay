@@ -331,6 +331,25 @@ describe('PaymentsService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
+    it('should mark PENDING_HOST_REVIEW record as FAILED', async () => {
+      const pendingReviewRecord = {
+        ...mockRecord,
+        status: PaymentStatus.PENDING_HOST_REVIEW,
+      } as PaymentRecordEntity;
+      const failedRecord = {
+        ...mockRecord,
+        status: PaymentStatus.FAILED,
+      } as PaymentRecordEntity;
+
+      recordRepo.findById.mockResolvedValue(pendingReviewRecord);
+      memberRepo.findById.mockResolvedValue(mockMember as any);
+      groupRepo.findById.mockResolvedValue(mockGroup as any);
+      recordRepo.update.mockResolvedValue(failedRecord);
+
+      const result = await service.waivePayment('record-123', 'host-123');
+      expect(result.status).toBe(PaymentStatus.FAILED);
+    });
+
     it('should mark PENDING record as FAILED', async () => {
       const failedRecord = {
         ...mockRecord,

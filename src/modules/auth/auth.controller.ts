@@ -52,11 +52,11 @@ export class AuthController {
     const headers = req.headers;
     const authHeader = headers['authorization'];
     this.logger.log('=== DEBUG HEADERS ===');
-    this.logger.log(`Authorization: ${authHeader ?? '(none)'}`);
-    this.logger.log(`All headers: ${JSON.stringify(headers, null, 2)}`);
+    this.logger.log(`Authorization: ${authHeader ? '[REDACTED]' : '(none)'}`);
+    this.logger.log('All headers: [See response body]');
     this.logger.log('=== END DEBUG ===');
     return {
-      authorization: authHeader ?? '(none)',
+      authorization: authHeader ? '[REDACTED]' : '(none)',
       allHeaders: Object.fromEntries(
         Object.entries(headers).map(([k, v]) => [
           k,

@@ -61,6 +61,7 @@ export class PaymentsService {
     [PaymentStatus.PENDING_HOST_REVIEW]: [
       PaymentStatus.PAID,
       PaymentStatus.PENDING,
+      PaymentStatus.FAILED, // host waive
     ],
     [PaymentStatus.REFUNDED]: [PaymentStatus.REFUNDED],
   };
@@ -115,13 +116,21 @@ export class PaymentsService {
     await this.assertCanAccess(group, member, requesterId);
 
     const gateway = this.gatewayFactory.getGateway(group);
-    const result = await gateway.createPaymentLink({
-      paymentId: record.id,
-      amount: Math.round(Number(record.amountDue)),
-      expiresInMinutes: 60,
-      payerName: member.displayName,
-      description: `Pembayaran ${group.serviceName}`,
-    });
+    let result: import('../payment-gateway/payment-gateway.interface.js').PaymentLinkResult;
+    try {
+      result = await gateway.createPaymentLink({
+        paymentId: record.id,
+        amount: Math.round(Number(record.amountDue)),
+        expiresInMinutes: 60,
+        payerName: member.displayName,
+        description: `Pembayaran ${group.serviceName}`,
+      });
+    } catch {
+      throw new BadRequestException({
+        code: ErrorCode.VALIDATION_ERROR,
+        message: 'Payment gateway tidak dapat diakses. Periksa konfigurasi API key.',
+      });
+    }
 
     this.ensureTransition(record.status, PaymentStatus.AWAITING_GATEWAY);
     await this.recordRepo.update(record.id, {
@@ -183,6 +192,7 @@ export class PaymentsService {
     });
 
     await this.redisService.set(usedKey, 'true', 7 * 24 * 60 * 60);
+    this.logger.log(`Payment ${record.id} confirmed via signed URL → PENDING_HOST_REVIEW`);
     return updated;
   }
 
@@ -215,6 +225,7 @@ export class PaymentsService {
       paymentNote: dto.paymentNote ?? null,
     });
 
+    this.logger.log(`Host ${hostUserId} marked payment ${record.id} as PAID`);
     await this.billingService.updateCycleStatus(record.periodId);
     return updated;
   }
@@ -238,11 +249,13 @@ export class PaymentsService {
         : PaymentStatus.FAILED;
     this.ensureTransition(record.status, target);
 
-    return this.recordRepo.update(record.id, {
+    const updated = await this.recordRepo.update(record.id, {
       status: target,
       confirmedBy: PaymentConfirmationSource.HOST_MANUAL,
       paymentNote: 'Waived manually by host',
     });
+    this.logger.log(`Host ${hostUserId} waived payment ${record.id} → ${target}`);
+    return updated;
   }
 
   async confirmManual(
@@ -317,6 +330,7 @@ export class PaymentsService {
           : record.confirmedBy,
     });
 
+    this.logger.log(`Host ${hostUserId} reviewed payment ${record.id}: ${action} → ${target}`);
     if (action === 'approve') {
       await this.billingService.updateCycleStatus(record.periodId);
     }

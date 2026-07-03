@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { FindManyOptions, FindOptionsWhere, In, Repository } from 'typeorm';
 import { BaseEntity } from '../entities/base.entity.js';
+import { ErrorCode } from '../../common/constants/error-codes.js';
 
 @Injectable()
 export abstract class BaseRepository<T extends BaseEntity> {
@@ -13,7 +14,8 @@ export abstract class BaseRepository<T extends BaseEntity> {
   async findByIdOrFail(id: string): Promise<T> {
     const entity = await this.findById(id);
     if (!entity) {
-      throw new NotFoundException(`${this.repo.metadata.name} with id ${id} not found`);
+      // ponytail: don't leak entity type or ID — use generic message
+      throw new NotFoundException({ code: ErrorCode.VALIDATION_ERROR, message: 'Data tidak ditemukan' });
     }
     return entity;
   }

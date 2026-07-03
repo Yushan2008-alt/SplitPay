@@ -137,7 +137,7 @@ export class DailyCheckService {
       const graceEndMs = dueDate.getTime() + graceDays * 24 * 60 * 60 * 1000;
 
       if (nowMs > graceEndMs) {
-        await this.paymentRepo.update(payment.id, { status: PaymentStatus.FAILED });
+        await this.paymentRepo.update(payment.id, { status: PaymentStatus.EXPIRED });
         overdueIds.push(payment.id);
       }
     }

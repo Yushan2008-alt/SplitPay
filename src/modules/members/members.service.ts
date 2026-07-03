@@ -4,6 +4,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -21,6 +22,7 @@ import {
   PaymentPeriodRepository,
   PaymentRecordRepository,
 } from '../../database/repositories/index.js';
+import { CacheService } from '../cache/cache.service.js';
 import { UsersService } from '../users/users.service.js';
 import { SplitCalculationService } from '../split/split-calculation.service.js';
 import type { AddMemberDto } from './dto/add-member.dto.js';
@@ -30,9 +32,12 @@ const MAX_MEMBERS = 20;
 
 @Injectable()
 export class MembersService {
+  private readonly logger = new Logger(MembersService.name);
+
   constructor(
     private readonly groupRepo: GroupRepository,
     private readonly memberRepo: GroupMemberRepository,
+    private readonly cacheService: CacheService,
     private readonly usersService: UsersService,
     private readonly splitService: SplitCalculationService,
     private readonly periodRepo: PaymentPeriodRepository,
@@ -131,6 +136,7 @@ export class MembersService {
         }
       }
 
+      if (user) await this.cacheService.del(`cache:user:${user.id}:groups`);
       return this.memberRepo.findById(deletedMember.id) as Promise<GroupMemberEntity>;
     }
 
@@ -188,6 +194,7 @@ export class MembersService {
       }
     }
 
+    if (user) await this.cacheService.del(`cache:user:${user.id}:groups`);
     return member;
   }
 
@@ -197,12 +204,12 @@ export class MembersService {
     groupId: string,
     requestorId: string,
   ): Promise<GroupMemberEntity[]> {
-    // Verify requestor is a member
+    // ponytail: throw 403 (not 404) to prevent group existence enumeration
     const group = await this.groupRepo.findById(groupId);
     if (!group) {
-      throw new NotFoundException({
-        code: ErrorCode.GROUP_NOT_FOUND,
-        message: 'Grup tidak ditemukan',
+      throw new ForbiddenException({
+        code: ErrorCode.FORBIDDEN,
+        message: 'Akses ditolak',
       });
     }
 
@@ -228,14 +235,15 @@ export class MembersService {
     requestorId: string,
     dto: UpdateMemberDto,
   ): Promise<GroupMemberEntity> {
+    // ponytail: throw 403 (not 404) to prevent group/member enumeration
     const group = await this.groupRepo.findById(groupId);
     if (!group) {
-      throw new NotFoundException({ code: ErrorCode.GROUP_NOT_FOUND, message: 'Grup tidak ditemukan' });
+      throw new ForbiddenException({ code: ErrorCode.FORBIDDEN, message: 'Akses ditolak' });
     }
 
     const member = await this.memberRepo.findById(memberId);
     if (!member || member.groupId !== groupId || member.status !== MemberStatus.ACTIVE) {
-      throw new NotFoundException({ code: ErrorCode.MEMBER_NOT_FOUND, message: 'Anggota tidak ditemukan' });
+      throw new ForbiddenException({ code: ErrorCode.FORBIDDEN, message: 'Akses ditolak' });
     }
 
     const isHost = group.hostId === requestorId;
@@ -293,6 +301,8 @@ export class MembersService {
 
     await this.memberRepo.update(memberId, { status: MemberStatus.REMOVED });
     await this.memberRepo.softDelete(memberId);
+
+    if (member.userId) await this.cacheService.del(`cache:user:${member.userId}:groups`);
 
     // Recalculate EQUAL shares after removal
     if (group.splitMethod === SplitMethod.EQUAL) {

@@ -39,8 +39,8 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
       );
       if (blacklisted) {
         throw new UnauthorizedException({
-          code: ErrorCode.TOKEN_REVOKED,
-          message: 'Refresh token telah dinonaktifkan',
+          code: ErrorCode.UNAUTHORIZED,
+          message: 'Token tidak valid atau kadaluarsa',
         });
       }
     } catch (err: unknown) {
@@ -58,7 +58,7 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     if (!refreshToken) {
       throw new UnauthorizedException({
         code: ErrorCode.UNAUTHORIZED,
-        message: 'Refresh token tidak ditemukan',
+        message: 'Token tidak valid atau kadaluarsa',
       });
     }
     return { ...payload, refreshToken };

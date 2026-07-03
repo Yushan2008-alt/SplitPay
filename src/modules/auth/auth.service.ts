@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -23,6 +24,7 @@ import type { JwtPayload } from './interfaces/jwt-payload.interface.js';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private readonly otpExpiry: number;
   private readonly otpMaxAttempts: number;
   private readonly otpCooldown: number;
@@ -48,6 +50,7 @@ export class AuthService {
   ) {
     const user = await this.usersService.create(dto.email, dto.name, dto.phone);
     const otp = await this.generateAndStoreOtp(user.email, ip, userAgent);
+    this.logger.log(`User registered: ${this.maskEmail(user.email)}`);
     return {
       message: 'Registrasi berhasil. Silakan cek email untuk OTP.',
       ...(otp ? { devOtp: otp } : {}),
@@ -58,17 +61,17 @@ export class AuthService {
     const email = dto.email.toLowerCase().trim();
     const user = await this.usersService.findByEmail(email);
     if (!user) {
-      throw new NotFoundException({
-        code: ErrorCode.USER_NOT_FOUND,
-        message: 'Email tidak terdaftar',
-      });
+      // ponytail: don't leak whether email exists — always return same message
+      this.logger.warn(`OTP requested for unknown email: ${this.maskEmail(email)}`);
+      return { message: 'Jika email terdaftar, OTP telah dikirim.' };
     }
 
     await this.checkCooldown(email);
     await this.invalidateOldOtps(email);
     const otp = await this.generateAndStoreOtp(email, ip, userAgent);
+    this.logger.log(`OTP sent to ${this.maskEmail(email)}`);
     return {
-      message: 'OTP telah dikirim ke email Anda.',
+      message: 'Jika email terdaftar, OTP telah dikirim.',
       ...(otp ? { devOtp: otp } : {}),
     };
   }
@@ -77,18 +80,22 @@ export class AuthService {
     const email = dto.email.toLowerCase().trim();
     const user = await this.usersService.findByEmail(email);
     if (!user) {
-      throw new NotFoundException({
-        code: ErrorCode.USER_NOT_FOUND,
-        message: 'Email tidak terdaftar',
+      // ponytail: don't leak whether email exists — return generic OTP error
+      this.logger.warn(`OTP verification failed — unknown email: ${this.maskEmail(email)}`);
+      throw new BadRequestException({
+        code: ErrorCode.INVALID_OTP,
+        message: 'OTP tidak valid',
       });
     }
 
     const otpEntity = await this.otpRepo.findValidByEmail(email);
 
     if (!otpEntity) {
+      // ponytail: don't leak whether OTP expired vs never existed
+      this.logger.warn(`OTP verification failed — no valid code for ${this.maskEmail(email)}`);
       throw new BadRequestException({
-        code: ErrorCode.OTP_EXPIRED,
-        message: 'OTP telah kadaluarsa. Silakan request OTP baru.',
+        code: ErrorCode.INVALID_OTP,
+        message: 'OTP tidak valid',
       });
     }
 
@@ -97,9 +104,10 @@ export class AuthService {
 
     if (otpEntity.attempts > this.otpMaxAttempts) {
       await this.otpRepo.update(otpEntity.id, { isUsed: true });
+      this.logger.warn(`OTP max attempts reached for ${this.maskEmail(email)}`);
       throw new BadRequestException({
-        code: ErrorCode.OTP_MAX_ATTEMPTS,
-        message: 'Terlalu banyak percobaan. Silakan request OTP baru.',
+        code: ErrorCode.INVALID_OTP,
+        message: 'OTP tidak valid.',
       });
     }
 
@@ -117,6 +125,8 @@ export class AuthService {
     }
 
     await this.usersService.updateLastLogin(user.id);
+
+    this.logger.log(`OTP verified successfully for ${this.maskEmail(email)}`);
 
     const tokens = await this.generateTokens(user);
     return tokens;
@@ -137,12 +147,14 @@ export class AuthService {
 
     const user = await this.usersService.findById(payload.sub);
     if (!user) {
+      this.logger.warn(`Refresh token used for deleted user: ${payload.sub}`);
       throw new UnauthorizedException({
         code: ErrorCode.UNAUTHORIZED,
-        message: 'Autentikasi diperlukan',
+        message: 'Token tidak valid atau kadaluarsa',
       });
     }
 
+    this.logger.log(`Token refreshed for user ${this.maskEmail(user.email)}`);
     return this.generateTokens(user);
   }
 
@@ -218,8 +230,9 @@ expiresIn: (this.config.get<string>('jwt.refreshExpiresIn') ??
     const otp = this.generateOtpCode();
     const codeHash = hashSync(otp, 10);
 
+    // ponytail: only log masked email in dev; OTP is returned in response for E2E tests
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`[DEV OTP] ${email}: ${otp}`);
+      this.logger.log(`[DEV] OTP generated for ${this.maskEmail(email)}`);
     }
 
     await this.mailService.sendOtpEmail(email, otp);
@@ -241,6 +254,12 @@ expiresIn: (this.config.get<string>('jwt.refreshExpiresIn') ??
 
   private generateOtpCode(): string {
     return generateOTP(6);
+  }
+
+  // ponytail: mask PII in logs — show first char + domain only
+  private maskEmail(email: string): string {
+    const [local, domain] = email.split('@');
+    return `${local[0]}***@${domain}`;
   }
 
   private async checkCooldown(email: string): Promise<void> {
