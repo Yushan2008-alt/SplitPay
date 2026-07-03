@@ -8,7 +8,7 @@ export class SubscribePushDto {
   })
   @IsNotEmpty()
   @IsUrl()
-  endpoint: string;
+  endpoint!: string;
 
   @ApiProperty({
     description: 'P256DH key from browser subscription',
@@ -16,7 +16,7 @@ export class SubscribePushDto {
   })
   @IsNotEmpty()
   @IsString()
-  p256dh: string;
+  p256dh!: string;
 
   @ApiProperty({
     description: 'Auth secret from browser subscription',
@@ -24,7 +24,7 @@ export class SubscribePushDto {
   })
   @IsNotEmpty()
   @IsString()
-  auth: string;
+  auth!: string;
 
   @ApiProperty({
     description: 'User agent string (optional)',
@@ -43,5 +43,5 @@ export class UnsubscribePushDto {
   })
   @IsNotEmpty()
   @IsUrl()
-  endpoint: string;
+  endpoint!: string;
 }

@@ -103,9 +103,12 @@ describe('Enums', () => {
 
   it('PaymentStatus has correct values', () => {
     expect(PaymentStatus.PENDING).toBe('pending');
+    expect(PaymentStatus.AWAITING_GATEWAY).toBe('awaiting_gateway');
     expect(PaymentStatus.PAID).toBe('paid');
-    expect(PaymentStatus.OVERDUE).toBe('overdue');
-    expect(PaymentStatus.WAIVED).toBe('waived');
+    expect(PaymentStatus.FAILED).toBe('failed');
+    expect(PaymentStatus.EXPIRED).toBe('expired');
+    expect(PaymentStatus.PENDING_HOST_REVIEW).toBe('pending_host_review');
+    expect(PaymentStatus.REFUNDED).toBe('refunded');
   });
 
   it('NotificationType has correct values', () => {

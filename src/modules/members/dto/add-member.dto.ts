@@ -17,6 +17,7 @@ import { NotificationPreference } from '../../../database/entities/enums.js';
 
 export class AddMemberDto {
   /** Email anggota (wajib) */
+  @IsNotEmpty({ message: 'Email wajib diisi' })
   @IsEmail({}, { message: 'Email tidak valid' })
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.toLowerCase().trim() : value,

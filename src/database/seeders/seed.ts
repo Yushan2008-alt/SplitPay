@@ -23,6 +23,7 @@ import {
   MemberRole,
   MemberStatus,
   NotificationPreference,
+  PaymentConfirmationSource,
   PaymentStatus,
   PeriodStatus,
   SplitMethod,
@@ -157,7 +158,7 @@ async function seed(): Promise<void> {
       amountDue: '39500',
       status: PaymentStatus.PAID,
       confirmedAt: new Date(),
-      confirmedBy: 'self',
+      confirmedBy: PaymentConfirmationSource.MEMBER_SELF_REPORT,
     });
     const payerRecord = recordRepo.create({
       periodId: savedPeriod.id,

@@ -47,6 +47,6 @@ expiresIn: (config.get<string>('jwt.accessExpiresIn') ?? '15m') as any,
     JwtStrategy,
     JwtRefreshStrategy,
   ],
-  exports: [AuthService, RedisService],
+  exports: [AuthService, RedisService, 'REDIS_CLIENT'],
 })
 export class AuthModule {}

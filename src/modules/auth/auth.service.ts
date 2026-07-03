@@ -47,8 +47,11 @@ export class AuthService {
     userAgent?: string,
   ) {
     const user = await this.usersService.create(dto.email, dto.name, dto.phone);
-    await this.generateAndStoreOtp(user.email, ip, userAgent);
-    return { message: 'Registrasi berhasil. Silakan cek email untuk OTP.' };
+    const otp = await this.generateAndStoreOtp(user.email, ip, userAgent);
+    return {
+      message: 'Registrasi berhasil. Silakan cek email untuk OTP.',
+      ...(otp ? { devOtp: otp } : {}),
+    };
   }
 
   async sendOtp(dto: { email: string }, ip?: string, userAgent?: string) {
@@ -63,8 +66,11 @@ export class AuthService {
 
     await this.checkCooldown(email);
     await this.invalidateOldOtps(email);
-    await this.generateAndStoreOtp(email, ip, userAgent);
-    return { message: 'OTP telah dikirim ke email Anda.' };
+    const otp = await this.generateAndStoreOtp(email, ip, userAgent);
+    return {
+      message: 'OTP telah dikirim ke email Anda.',
+      ...(otp ? { devOtp: otp } : {}),
+    };
   }
 
   async verifyOtp(dto: { email: string; otp: string }, ip?: string) {
@@ -208,7 +214,7 @@ expiresIn: (this.config.get<string>('jwt.refreshExpiresIn') ??
     email: string,
     ip?: string,
     userAgent?: string,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const otp = this.generateOtpCode();
     const codeHash = hashSync(otp, 10);
 
@@ -225,6 +231,12 @@ expiresIn: (this.config.get<string>('jwt.refreshExpiresIn') ??
       ipAddress: ip ?? null,
       userAgent: userAgent ?? null,
     });
+
+    // ponytail: return plain OTP in dev so E2E tests can automate verification
+    if (process.env.NODE_ENV !== 'production') {
+      return otp;
+    }
+    return undefined;
   }
 
   private generateOtpCode(): string {

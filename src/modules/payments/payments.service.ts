@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -9,11 +10,12 @@ import { ConfigService } from '@nestjs/config';
 import { ErrorCode } from '../../common/constants/error-codes.js';
 import { validateSignedToken } from '../../common/utils/crypto.util.js';
 import {
+  GatewayProvider,
   GroupEntity,
   MemberRole,
   MemberStatus,
+  PaymentConfirmationSource,
   PaymentStatus,
-  PeriodStatus,
 } from '../../database/entities/index.js';
 import type {
   PaymentPeriodEntity,
@@ -29,12 +31,39 @@ import {
 import { BillingCycleService } from '../billing/billing-cycle.service.js';
 import { RedisService } from '../auth/redis.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { PaymentGatewayFactory } from '../payment-gateway/payment-gateway.factory.js';
 import type { ManualMarkPaidDto } from './dto/manual-mark-paid.dto.js';
+
+type ReviewAction = 'approve' | 'reject';
 
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
   private readonly signedUrlSecret: string;
+
+  // ponytail: centralized transition rules so every caller enforces the same state machine.
+  private readonly transitionMap: Record<PaymentStatus, readonly PaymentStatus[]> = {
+    [PaymentStatus.PENDING]: [
+      PaymentStatus.AWAITING_GATEWAY,
+      PaymentStatus.PENDING_HOST_REVIEW,
+      PaymentStatus.PAID, // host manual fast-path
+      PaymentStatus.FAILED, // host waive
+    ],
+    [PaymentStatus.AWAITING_GATEWAY]: [
+      PaymentStatus.PAID,
+      PaymentStatus.FAILED,
+      PaymentStatus.EXPIRED,
+      PaymentStatus.AWAITING_GATEWAY,
+    ],
+    [PaymentStatus.PAID]: [PaymentStatus.REFUNDED, PaymentStatus.PAID],
+    [PaymentStatus.FAILED]: [PaymentStatus.FAILED],
+    [PaymentStatus.EXPIRED]: [PaymentStatus.EXPIRED],
+    [PaymentStatus.PENDING_HOST_REVIEW]: [
+      PaymentStatus.PAID,
+      PaymentStatus.PENDING,
+    ],
+    [PaymentStatus.REFUNDED]: [PaymentStatus.REFUNDED],
+  };
 
   constructor(
     private readonly recordRepo: PaymentRecordRepository,
@@ -45,19 +74,74 @@ export class PaymentsService {
     private readonly billingService: BillingCycleService,
     private readonly redisService: RedisService,
     private readonly notificationsService: NotificationsService,
+    private readonly gatewayFactory: PaymentGatewayFactory,
     private readonly config: ConfigService,
   ) {
     this.signedUrlSecret = this.config.getOrThrow<string>('SIGNED_URL_SECRET');
   }
 
-  // ─── CONFIRM PAYMENT (SIGNED URL) ────────────────────────────────────────
+  async createGatewayPaymentLink(
+    paymentId: string,
+    requesterId: string,
+  ): Promise<{
+    paymentId: string;
+    provider: GatewayProvider;
+    checkoutUrl: string | null;
+    qrisString: string | null;
+    expiresAt: string;
+  }> {
+    const record = await this.recordRepo.findById(paymentId);
+    if (!record) {
+      throw new NotFoundException({
+        code: ErrorCode.PAYMENT_RECORD_NOT_FOUND,
+        message: 'Payment record tidak ditemukan',
+      });
+    }
 
-  /**
-   * Confirm payment via signed URL token.
-   * Idempotent: returns success if already paid.
-   */
+    const member = await this.memberRepo.findById(record.memberId);
+    if (!member) {
+      throw new NotFoundException({
+        code: ErrorCode.MEMBER_NOT_FOUND,
+        message: 'Member tidak ditemukan',
+      });
+    }
+    const group = await this.groupRepo.findById(member.groupId);
+    if (!group) {
+      throw new NotFoundException({
+        code: ErrorCode.GROUP_NOT_FOUND,
+        message: 'Grup tidak ditemukan',
+      });
+    }
+    await this.assertCanAccess(group, member, requesterId);
+
+    const gateway = this.gatewayFactory.getGateway(group);
+    const result = await gateway.createPaymentLink({
+      paymentId: record.id,
+      amount: Math.round(Number(record.amountDue)),
+      expiresInMinutes: 60,
+      payerName: member.displayName,
+      description: `Pembayaran ${group.serviceName}`,
+    });
+
+    this.ensureTransition(record.status, PaymentStatus.AWAITING_GATEWAY);
+    await this.recordRepo.update(record.id, {
+      status: PaymentStatus.AWAITING_GATEWAY,
+      gatewayProvider: gateway.provider,
+      gatewayReferenceId: result.gatewayReferenceId,
+      paymentMethod: result.checkoutUrl ? 'gateway_link' : 'gateway_qris',
+    });
+
+    return {
+      paymentId: record.id,
+      provider: gateway.provider,
+      checkoutUrl: result.checkoutUrl,
+      qrisString: result.qrisString,
+      expiresAt: result.expiresAt,
+    };
+  }
+
+  // ─── CONFIRM PAYMENT (SIGNED URL) ────────────────────────────────────────
   async confirmPayment(token: string): Promise<PaymentRecordEntity> {
-    // 1. Validate signed token
     const payload = validateSignedToken(token, this.signedUrlSecret);
     if (!payload || typeof payload.recordId !== 'string') {
       throw new BadRequestException({
@@ -67,23 +151,17 @@ export class PaymentsService {
     }
 
     const recordId = payload.recordId as string;
-
-    // 2. Check idempotency in Redis (prevent replay attack)
     const usedKey = `confirm:used:${recordId}`;
     const isUsed = await this.redisService.get(usedKey);
     if (isUsed) {
-      // Token already used, but check if record is PAID (idempotent success)
       const record = await this.recordRepo.findById(recordId);
-      if (record?.status === PaymentStatus.PAID) {
-        return record;
-      }
+      if (record) return record;
       throw new BadRequestException({
         code: ErrorCode.INVALID_SIGNED_URL,
         message: 'Token sudah digunakan',
       });
     }
 
-    // 3. Find payment record with relations
     const record = await this.recordRepo.findById(recordId);
     if (!record) {
       throw new NotFoundException({
@@ -92,75 +170,23 @@ export class PaymentsService {
       });
     }
 
-    // 4. Idempotent: if already PAID, return success
-    if (record.status === PaymentStatus.PAID) {
-      await this.redisService.set(usedKey, 'true', 7 * 24 * 60 * 60); // 7 days
+    if (record.status === PaymentStatus.PENDING_HOST_REVIEW) {
+      await this.redisService.set(usedKey, 'true', 7 * 24 * 60 * 60);
       return record;
     }
 
-    // 5. Validate state transition: only PENDING or OVERDUE can become PAID
-    if (
-      record.status !== PaymentStatus.PENDING &&
-      record.status !== PaymentStatus.OVERDUE
-    ) {
-      throw new BadRequestException({
-        code: ErrorCode.VALIDATION_ERROR,
-        message: `Tidak dapat mengkonfirmasi pembayaran dengan status ${record.status}`,
-      });
-    }
-
-    // 6. Update payment record to PAID
+    this.ensureTransition(record.status, PaymentStatus.PENDING_HOST_REVIEW);
     const updated = await this.recordRepo.update(record.id, {
-      status: PaymentStatus.PAID,
-      amountPaid: record.amountDue,
-      confirmedAt: new Date(),
-      confirmedBy: 'self',
+      status: PaymentStatus.PENDING_HOST_REVIEW,
+      confirmedBy: PaymentConfirmationSource.MEMBER_SELF_REPORT,
+      paymentNote: 'Self-report via signed URL',
     });
 
-    // 7. Mark token as used in Redis
     await this.redisService.set(usedKey, 'true', 7 * 24 * 60 * 60);
-
-    // 8. Update billing cycle status
-    await this.billingService.updateCycleStatus(record.periodId);
-
-    // 9. Queue notification to host
-    const member = await this.memberRepo.findById(record.memberId);
-    if (member) {
-      try {
-        const group = await this.groupRepo.findById(member.groupId);
-        const host = group ? await this.userRepo.findById(group.hostId) : null;
-        if (group && host) {
-          await this.notificationsService.sendPaymentConfirmed({
-            recordId: record.id,
-            memberId: member.id,
-            groupId: member.groupId,
-            periodId: record.periodId,
-            amountPaid: record.amountPaid ?? record.amountDue,
-            serviceName: group.name,
-            memberName: member.displayName ?? member.email,
-            hostEmail: host.email,
-            hostPhone: host.phone ?? undefined,
-            hostName: host.name,
-            confirmedAt: (record.confirmedAt ?? new Date()).toISOString(),
-          });
-        }
-      } catch (notifError) {
-        /* ponytail: notification failure is non-fatal — payment is already
-           confirmed, notification can be retried via queue. */
-        this.logger.warn(
-          `Failed to send payment_confirmed notification for record ${record.id}: ${(notifError as Error).message}`,
-        );
-      }
-    }
-
     return updated;
   }
 
   // ─── HOST MANUAL ACTIONS ──────────────────────────────────────────────────
-
-  /**
-   * Host manually marks a member's payment as PAID.
-   */
   async hostMarkPaid(
     recordId: string,
     hostUserId: string,
@@ -174,45 +200,25 @@ export class PaymentsService {
       });
     }
 
-    // Assert host ownership via member → group → host
     await this.assertHostOwnership(record.memberId, hostUserId);
+    if (record.status === PaymentStatus.PAID) return record;
 
-    // Idempotent: if already PAID, return as-is
-    if (record.status === PaymentStatus.PAID) {
-      return record;
-    }
-
-    // Validate state transition
-    if (
-      record.status !== PaymentStatus.PENDING &&
-      record.status !== PaymentStatus.OVERDUE
-    ) {
-      throw new BadRequestException({
-        code: ErrorCode.VALIDATION_ERROR,
-        message: `Tidak dapat mark paid untuk status ${record.status}`,
-      });
-    }
-
-    // Update to PAID
+    this.ensureTransition(record.status, PaymentStatus.PAID);
+    const paidAt = new Date();
     const updated = await this.recordRepo.update(record.id, {
       status: PaymentStatus.PAID,
       amountPaid: record.amountDue,
-      confirmedAt: new Date(),
-      confirmedBy: 'host',
+      paidAt,
+      confirmedAt: paidAt,
+      confirmedBy: PaymentConfirmationSource.HOST_MANUAL,
       paymentMethod: dto.paymentMethod ?? null,
       paymentNote: dto.paymentNote ?? null,
     });
 
-    // Update billing cycle status
     await this.billingService.updateCycleStatus(record.periodId);
-
-    this.logger.log(`Host ${hostUserId} marked record ${recordId} as PAID`);
     return updated;
   }
 
-  /**
-   * Host waives a member's payment (e.g., member left, special case).
-   */
   async waivePayment(
     recordId: string,
     hostUserId: string,
@@ -224,35 +230,118 @@ export class PaymentsService {
         message: 'Payment record tidak ditemukan',
       });
     }
-
-    // Assert host ownership
     await this.assertHostOwnership(record.memberId, hostUserId);
 
-    // Idempotent: if already WAIVED, return as-is
-    if (record.status === PaymentStatus.WAIVED) {
-      return record;
+    const target =
+      record.status === PaymentStatus.PAID
+        ? PaymentStatus.REFUNDED
+        : PaymentStatus.FAILED;
+    this.ensureTransition(record.status, target);
+
+    return this.recordRepo.update(record.id, {
+      status: target,
+      confirmedBy: PaymentConfirmationSource.HOST_MANUAL,
+      paymentNote: 'Waived manually by host',
+    });
+  }
+
+  async confirmManual(
+    periodId: string,
+    memberId: string,
+    userId: string,
+  ): Promise<PaymentRecordEntity> {
+    const member = await this.memberRepo.findById(memberId);
+    if (!member) {
+      throw new NotFoundException({
+        code: ErrorCode.MEMBER_NOT_FOUND,
+        message: 'Member tidak ditemukan',
+      });
+    }
+    if (member.userId !== userId) {
+      throw new ForbiddenException({
+        code: ErrorCode.FORBIDDEN,
+        message: 'Anda tidak dapat mengkonfirmasi member lain',
+      });
     }
 
-    // No restriction: any status → WAIVED (host decision)
+    const record = await this.recordRepo.findByPeriodAndMember(periodId, memberId);
+    if (!record) {
+      throw new NotFoundException({
+        code: ErrorCode.PAYMENT_RECORD_NOT_FOUND,
+        message: 'Payment record tidak ditemukan',
+      });
+    }
+
+    this.ensureTransition(record.status, PaymentStatus.PENDING_HOST_REVIEW);
+    return this.recordRepo.update(record.id, {
+      status: PaymentStatus.PENDING_HOST_REVIEW,
+      confirmedBy: PaymentConfirmationSource.MEMBER_SELF_REPORT,
+      paymentNote: 'Self-report manual confirmation',
+    });
+  }
+
+  async reviewPayment(
+    paymentId: string,
+    hostUserId: string,
+    action: ReviewAction,
+  ): Promise<PaymentRecordEntity> {
+    if (action !== 'approve' && action !== 'reject') {
+      throw new BadRequestException({
+        code: ErrorCode.VALIDATION_ERROR,
+        message: 'Action harus approve atau reject',
+      });
+    }
+
+    const record = await this.recordRepo.findById(paymentId);
+    if (!record) {
+      throw new NotFoundException({
+        code: ErrorCode.PAYMENT_RECORD_NOT_FOUND,
+        message: 'Payment record tidak ditemukan',
+      });
+    }
+    await this.assertHostOwnership(record.memberId, hostUserId);
+
+    const target =
+      action === 'approve' ? PaymentStatus.PAID : PaymentStatus.PENDING;
+    this.ensureTransition(record.status, target);
+    const paidAt = action === 'approve' ? new Date() : null;
+
     const updated = await this.recordRepo.update(record.id, {
-      status: PaymentStatus.WAIVED,
-      confirmedAt: new Date(),
-      confirmedBy: 'host',
+      status: target,
+      paidAt,
+      confirmedAt: paidAt,
+      amountPaid: action === 'approve' ? record.amountDue : record.amountPaid,
+      confirmedBy:
+        action === 'approve'
+          ? PaymentConfirmationSource.HOST_MANUAL
+          : record.confirmedBy,
     });
 
-    // Update billing cycle status
-    await this.billingService.updateCycleStatus(record.periodId);
-
-    this.logger.log(`Host ${hostUserId} waived payment record ${recordId}`);
+    if (action === 'approve') {
+      await this.billingService.updateCycleStatus(record.periodId);
+    }
     return updated;
   }
 
-  // ─── PERIOD HISTORY ───────────────────────────────────────────────────────
+  async getPaymentHistory(
+    userId: string,
+    status?: PaymentStatus,
+    groupId?: string,
+  ): Promise<PaymentRecordEntity[]> {
+    const memberships = await this.memberRepo.findByUserId(userId);
+    const activeMemberships = memberships.filter(
+      (member) => member.status === MemberStatus.ACTIVE,
+    );
+    const memberIds = activeMemberships.map((member) => member.id);
+    const records = await Promise.all(
+      memberIds.map((memberId) =>
+        this.recordRepo.findHistoryByMemberAndFilters(memberId, status, groupId),
+      ),
+    );
+    return records.flat();
+  }
 
-  /**
-   * List all periods for a group (member access).
-   * Returns periods with user's own payment record.
-   */
+  // ─── PERIOD HISTORY ───────────────────────────────────────────────────────
   async getPeriods(
     groupId: string,
     userId: string,
@@ -262,36 +351,20 @@ export class PaymentsService {
       myRecord: PaymentRecordEntity | null;
     }>
   > {
-    // Assert membership
     await this.assertGroupMembership(groupId, userId);
-
     const periods = await this.periodRepo.findByGroupId(groupId);
 
-    // Find user's member record
-    const membership = await this.memberRepo.findByGroupAndUser(
-      groupId,
-      userId,
-    );
-    if (!membership) {
-      // User is host but not a member (edge case: host didn't add self as payer)
-      return periods.map((p) => ({ period: p, myRecord: null }));
-    }
+    const membership = await this.memberRepo.findByGroupAndUser(groupId, userId);
+    if (!membership) return periods.map((p) => ({ period: p, myRecord: null }));
 
-    // Batch load user's payment records
     const allRecords = await this.recordRepo.findByMemberId(membership.id);
     const recordMap = new Map(allRecords.map((r) => [r.periodId, r]));
-
     return periods.map((period) => ({
       period,
       myRecord: recordMap.get(period.id) ?? null,
     }));
   }
 
-  /**
-   * Get period detail with payment records.
-   * - Host: sees all records
-   * - Payer: sees only own record
-   */
   async getPeriodDetail(
     groupId: string,
     periodId: string,
@@ -301,9 +374,7 @@ export class PaymentsService {
     records: PaymentRecordEntity[];
     myRole: MemberRole;
   }> {
-    // Assert membership
     const myRole = await this.assertGroupMembership(groupId, userId);
-
     const period = await this.periodRepo.findById(periodId);
     if (!period || period.groupId !== groupId) {
       throw new NotFoundException({
@@ -312,37 +383,18 @@ export class PaymentsService {
       });
     }
 
-    let records: PaymentRecordEntity[];
-
     if (myRole === MemberRole.HOST) {
-      // Host sees all records
-      records = await this.recordRepo.findByPeriodId(periodId);
-    } else {
-      // Payer sees only own record
-      const membership = await this.memberRepo.findByGroupAndUser(
-        groupId,
-        userId,
-      );
-      if (!membership) {
-        records = [];
-      } else {
-        const myRecord = await this.recordRepo.findByPeriodAndMember(
-          periodId,
-          membership.id,
-        );
-        records = myRecord ? [myRecord] : [];
-      }
+      const records = await this.recordRepo.findByPeriodId(periodId);
+      return { period, records, myRole };
     }
 
-    return { period, records, myRole };
+    const membership = await this.memberRepo.findByGroupAndUser(groupId, userId);
+    if (!membership) return { period, records: [], myRole };
+    const myRecord = await this.recordRepo.findByPeriodAndMember(periodId, membership.id);
+    return { period, records: myRecord ? [myRecord] : [], myRole };
   }
 
   // ─── GUARD HELPERS ────────────────────────────────────────────────────────
-
-  /**
-   * Assert user is an active member or host of the group.
-   * Returns user's role.
-   */
   private async assertGroupMembership(
     groupId: string,
     userId: string,
@@ -354,13 +406,8 @@ export class PaymentsService {
         message: 'Akses ditolak',
       });
     }
+    if (group.hostId === userId) return MemberRole.HOST;
 
-    // Host always has access
-    if (group.hostId === userId) {
-      return MemberRole.HOST;
-    }
-
-    // Check membership
     const member = await this.memberRepo.findByGroupAndUser(groupId, userId);
     if (!member || member.status !== MemberStatus.ACTIVE) {
       throw new ForbiddenException({
@@ -368,13 +415,9 @@ export class PaymentsService {
         message: 'Anda bukan anggota grup ini',
       });
     }
-
     return member.role;
   }
 
-  /**
-   * Assert user is the host of the group that owns the member.
-   */
   private async assertHostOwnership(
     memberId: string,
     userId: string,
@@ -386,7 +429,6 @@ export class PaymentsService {
         message: 'Member tidak ditemukan',
       });
     }
-
     const group = await this.groupRepo.findById(member.groupId);
     if (!group || group.hostId !== userId) {
       throw new ForbiddenException({
@@ -394,7 +436,26 @@ export class PaymentsService {
         message: 'Aksi ini hanya bisa dilakukan oleh host grup',
       });
     }
-
     return group;
+  }
+
+  private async assertCanAccess(
+    group: GroupEntity,
+    member: { userId: string | null },
+    requesterId: string,
+  ): Promise<void> {
+    if (group.hostId === requesterId || member.userId === requesterId) return;
+    throw new ForbiddenException({
+      code: ErrorCode.FORBIDDEN,
+      message: 'Akses ditolak',
+    });
+  }
+
+  private ensureTransition(from: PaymentStatus, to: PaymentStatus): void {
+    if (this.transitionMap[from].includes(to)) return;
+    throw new ConflictException({
+      code: ErrorCode.VALIDATION_ERROR,
+      message: `Illegal state transition ${from} -> ${to}`,
+    });
   }
 }

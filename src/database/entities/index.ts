@@ -10,6 +10,7 @@ export { NotificationLogEntity } from './notification-log.entity.js';
 export { OtpCodeEntity } from './otp-code.entity.js';
 export { PaymentPeriodEntity } from './payment-period.entity.js';
 export { PaymentRecordEntity } from './payment-record.entity.js';
+export { PaymentWebhookLogEntity } from './payment-webhook-log.entity.js';
 export { PushSubscriptionEntity } from './push-subscription.entity.js';
 export { RefreshTokenEntity } from './refresh-token.entity.js';
 export { UserEntity } from './user.entity.js';

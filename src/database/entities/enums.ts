@@ -48,9 +48,23 @@ export enum PeriodStatus {
 
 export enum PaymentStatus {
   PENDING = 'pending',
+  AWAITING_GATEWAY = 'awaiting_gateway',
   PAID = 'paid',
-  OVERDUE = 'overdue',
-  WAIVED = 'waived',
+  FAILED = 'failed',
+  EXPIRED = 'expired',
+  PENDING_HOST_REVIEW = 'pending_host_review',
+  REFUNDED = 'refunded',
+}
+
+export enum GatewayProvider {
+  MIDTRANS = 'midtrans',
+  XENDIT = 'xendit',
+}
+
+export enum PaymentConfirmationSource {
+  SYSTEM_WEBHOOK = 'SYSTEM_WEBHOOK',
+  MEMBER_SELF_REPORT = 'MEMBER_SELF_REPORT',
+  HOST_MANUAL = 'HOST_MANUAL',
 }
 
 export enum NotificationType {

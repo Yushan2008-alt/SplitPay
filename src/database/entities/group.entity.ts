@@ -2,7 +2,12 @@
 import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { SoftDeleteBaseEntity } from './base.entity.js';
 import { UserEntity } from './user.entity.js';
-import { BillingFrequency, GroupStatus, SplitMethod } from './enums.js';
+import {
+  BillingFrequency,
+  GatewayProvider,
+  GroupStatus,
+  SplitMethod,
+} from './enums.js';
 import type { GroupMemberEntity } from './group-member.entity.js';
 import type { PaymentPeriodEntity } from './payment-period.entity.js';
 
@@ -63,6 +68,14 @@ export class GroupEntity extends SoftDeleteBaseEntity {
     default: GroupStatus.ACTIVE,
   })
   status: GroupStatus;
+
+  @Column({
+    type: 'enum',
+    enum: GatewayProvider,
+    name: 'payment_provider',
+    nullable: true,
+  })
+  paymentProvider: GatewayProvider | null;
 
   // Relations
   @OneToMany('GroupMemberEntity', (member: GroupMemberEntity) => member.group)

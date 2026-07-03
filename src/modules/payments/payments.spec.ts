@@ -1,5 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PaymentsService } from './payments.service.js';
 import { PaymentRecordRepository } from '../../database/repositories/payment-record.repository.js';
@@ -10,9 +15,19 @@ import { UserRepository } from '../../database/repositories/user.repository.js';
 import { BillingCycleService } from '../billing/billing-cycle.service.js';
 import { RedisService } from '../auth/redis.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { PaymentGatewayFactory } from '../payment-gateway/payment-gateway.factory.js';
 import { generateSignedToken } from '../../common/utils/crypto.util.js';
-import { PaymentStatus, MemberRole, MemberStatus } from '../../database/entities/enums.js';
-import type { PaymentRecordEntity, GroupEntity, GroupMemberEntity } from '../../database/entities/index.js';
+import {
+  PaymentStatus,
+  PaymentConfirmationSource,
+  MemberRole,
+  MemberStatus,
+} from '../../database/entities/enums.js';
+import type {
+  PaymentRecordEntity,
+  GroupEntity,
+  GroupMemberEntity,
+} from '../../database/entities/index.js';
 
 describe('PaymentsService', () => {
   let service: PaymentsService;
@@ -53,7 +68,11 @@ describe('PaymentsService', () => {
   };
 
   const secret = 'test-secret';
-  const validToken = generateSignedToken({ recordId: 'record-123' }, secret, 3600);
+  const validToken = generateSignedToken(
+    { recordId: 'record-123' },
+    secret,
+    3600,
+  );
 
   beforeEach(async () => {
     const mockRecordRepo = {
@@ -62,6 +81,7 @@ describe('PaymentsService', () => {
       findByPeriodId: jest.fn(),
       findByMemberId: jest.fn(),
       findByPeriodAndMember: jest.fn(),
+      findHistoryByMemberAndFilters: jest.fn(),
     };
 
     const mockPeriodRepo = {
@@ -76,6 +96,7 @@ describe('PaymentsService', () => {
     const mockMemberRepo = {
       findById: jest.fn(),
       findByGroupAndUser: jest.fn(),
+      findByUserId: jest.fn(),
     };
 
     const mockBillingService = {
@@ -97,6 +118,10 @@ describe('PaymentsService', () => {
       sendOverdueAlert: jest.fn(),
     };
 
+    const mockGatewayFactory = {
+      getGateway: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PaymentsService,
@@ -108,6 +133,7 @@ describe('PaymentsService', () => {
         { provide: BillingCycleService, useValue: mockBillingService },
         { provide: RedisService, useValue: mockRedisService },
         { provide: NotificationsService, useValue: mockNotificationsService },
+        { provide: PaymentGatewayFactory, useValue: mockGatewayFactory },
         {
           provide: ConfigService,
           useValue: {
@@ -136,17 +162,22 @@ describe('PaymentsService', () => {
       );
     });
 
-    it('should throw BadRequestException if token already used', async () => {
+    it('should return record if token already used (idempotent)', async () => {
       redisService.get.mockResolvedValue('true');
-      recordRepo.findById.mockResolvedValue({ ...mockRecord, status: PaymentStatus.PENDING } as any);
+      recordRepo.findById.mockResolvedValue({
+        ...mockRecord,
+        status: PaymentStatus.PENDING,
+      } as any);
 
-      await expect(service.confirmPayment(validToken)).rejects.toThrow(
-        BadRequestException,
-      );
+      const result = await service.confirmPayment(validToken);
+      expect(result).toBeDefined();
     });
 
     it('should return record if already PAID (idempotent)', async () => {
-      const paidRecord = { ...mockRecord, status: PaymentStatus.PAID } as PaymentRecordEntity;
+      const paidRecord = {
+        ...mockRecord,
+        status: PaymentStatus.PAID,
+      } as PaymentRecordEntity;
 
       redisService.get.mockResolvedValue('true');
       recordRepo.findById.mockResolvedValue(paidRecord);
@@ -164,14 +195,31 @@ describe('PaymentsService', () => {
       );
     });
 
-    it('should throw BadRequestException for invalid state transition', async () => {
-      const waivedRecord = { ...mockRecord, status: PaymentStatus.WAIVED } as PaymentRecordEntity;
+    it('should transition to PENDING_HOST_REVIEW for valid token', async () => {
+      const updatedRecord = {
+        ...mockRecord,
+        status: PaymentStatus.PENDING_HOST_REVIEW,
+      } as PaymentRecordEntity;
 
       redisService.get.mockResolvedValue(null);
-      recordRepo.findById.mockResolvedValue(waivedRecord);
+      recordRepo.findById.mockResolvedValue(mockRecord as any);
+      recordRepo.update.mockResolvedValue(updatedRecord);
+
+      const result = await service.confirmPayment(validToken);
+      expect(result.status).toBe(PaymentStatus.PENDING_HOST_REVIEW);
+    });
+
+    it('should throw ConflictException for invalid state transition', async () => {
+      const refundedRecord = {
+        ...mockRecord,
+        status: PaymentStatus.REFUNDED,
+      } as PaymentRecordEntity;
+
+      redisService.get.mockResolvedValue(null);
+      recordRepo.findById.mockResolvedValue(refundedRecord);
 
       await expect(service.confirmPayment(validToken)).rejects.toThrow(
-        BadRequestException,
+        ConflictException,
       );
     });
   });
@@ -188,7 +236,10 @@ describe('PaymentsService', () => {
     it('should throw ForbiddenException if not host', async () => {
       recordRepo.findById.mockResolvedValue(mockRecord as any);
       memberRepo.findById.mockResolvedValue(mockMember as any);
-      groupRepo.findById.mockResolvedValue({ ...mockGroup, hostId: 'other-host' } as any);
+      groupRepo.findById.mockResolvedValue({
+        ...mockGroup,
+        hostId: 'other-host',
+      } as any);
 
       await expect(
         service.hostMarkPaid('record-123', 'host-123', {}),
@@ -196,8 +247,11 @@ describe('PaymentsService', () => {
     });
 
     it('should return record if already PAID (idempotent)', async () => {
-      const paidRecord = { ...mockRecord, status: PaymentStatus.PAID } as PaymentRecordEntity;
-      
+      const paidRecord = {
+        ...mockRecord,
+        status: PaymentStatus.PAID,
+      } as PaymentRecordEntity;
+
       recordRepo.findById.mockResolvedValue(paidRecord);
       memberRepo.findById.mockResolvedValue(mockMember as any);
       groupRepo.findById.mockResolvedValue(mockGroup as any);
@@ -207,8 +261,11 @@ describe('PaymentsService', () => {
     });
 
     it('should mark PENDING record as PAID', async () => {
-      const updatedRecord = { ...mockRecord, status: PaymentStatus.PAID } as PaymentRecordEntity;
-      
+      const updatedRecord = {
+        ...mockRecord,
+        status: PaymentStatus.PAID,
+      } as PaymentRecordEntity;
+
       recordRepo.findById.mockResolvedValue(mockRecord as any);
       memberRepo.findById.mockResolvedValue(mockMember as any);
       groupRepo.findById.mockResolvedValue(mockGroup as any);
@@ -219,25 +276,33 @@ describe('PaymentsService', () => {
         paymentNote: 'Paid manually',
       });
 
-      expect(recordRepo.update).toHaveBeenCalledWith('record-123', expect.objectContaining({
-        status: PaymentStatus.PAID,
-        confirmedBy: 'host',
-        paymentMethod: 'BCA Transfer',
-        paymentNote: 'Paid manually',
-      }));
-      expect(billingService.updateCycleStatus).toHaveBeenCalledWith('period-123');
+      expect(recordRepo.update).toHaveBeenCalledWith(
+        'record-123',
+        expect.objectContaining({
+          status: PaymentStatus.PAID,
+          confirmedBy: PaymentConfirmationSource.HOST_MANUAL,
+          paymentMethod: 'BCA Transfer',
+          paymentNote: 'Paid manually',
+        }),
+      );
+      expect(billingService.updateCycleStatus).toHaveBeenCalledWith(
+        'period-123',
+      );
     });
 
-    it('should throw BadRequestException for invalid state transition', async () => {
-      const waivedRecord = { ...mockRecord, status: PaymentStatus.WAIVED } as PaymentRecordEntity;
-      
-      recordRepo.findById.mockResolvedValue(waivedRecord);
+    it('should throw ConflictException for invalid state transition', async () => {
+      const refundedRecord = {
+        ...mockRecord,
+        status: PaymentStatus.REFUNDED,
+      } as PaymentRecordEntity;
+
+      recordRepo.findById.mockResolvedValue(refundedRecord);
       memberRepo.findById.mockResolvedValue(mockMember as any);
       groupRepo.findById.mockResolvedValue(mockGroup as any);
 
       await expect(
         service.hostMarkPaid('record-123', 'host-123', {}),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow(ConflictException);
     });
   });
 
@@ -253,52 +318,55 @@ describe('PaymentsService', () => {
     it('should throw ForbiddenException if not host', async () => {
       recordRepo.findById.mockResolvedValue(mockRecord as any);
       memberRepo.findById.mockResolvedValue(mockMember as any);
-      groupRepo.findById.mockResolvedValue({ ...mockGroup, hostId: 'other-host' } as any);
+      groupRepo.findById.mockResolvedValue({
+        ...mockGroup,
+        hostId: 'other-host',
+      } as any);
 
       await expect(
         service.waivePayment('record-123', 'host-123'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('should return record if already WAIVED (idempotent)', async () => {
-      const waivedRecord = { ...mockRecord, status: PaymentStatus.WAIVED } as PaymentRecordEntity;
-      
-      recordRepo.findById.mockResolvedValue(waivedRecord);
-      memberRepo.findById.mockResolvedValue(mockMember as any);
-      groupRepo.findById.mockResolvedValue(mockGroup as any);
+    it('should mark PENDING record as FAILED', async () => {
+      const failedRecord = {
+        ...mockRecord,
+        status: PaymentStatus.FAILED,
+      } as PaymentRecordEntity;
 
-      const result = await service.waivePayment('record-123', 'host-123');
-      expect(result.status).toBe(PaymentStatus.WAIVED);
-    });
-
-    it('should waive PENDING record', async () => {
-      const waivedRecord = { ...mockRecord, status: PaymentStatus.WAIVED } as PaymentRecordEntity;
-      
       recordRepo.findById.mockResolvedValue(mockRecord as any);
       memberRepo.findById.mockResolvedValue(mockMember as any);
       groupRepo.findById.mockResolvedValue(mockGroup as any);
-      recordRepo.update.mockResolvedValue(waivedRecord);
+      recordRepo.update.mockResolvedValue(failedRecord);
 
       const result = await service.waivePayment('record-123', 'host-123');
 
-      expect(recordRepo.update).toHaveBeenCalledWith('record-123', expect.objectContaining({
-        status: PaymentStatus.WAIVED,
-        confirmedBy: 'host',
-      }));
-      expect(billingService.updateCycleStatus).toHaveBeenCalledWith('period-123');
+      expect(recordRepo.update).toHaveBeenCalledWith(
+        'record-123',
+        expect.objectContaining({
+          status: PaymentStatus.FAILED,
+          confirmedBy: PaymentConfirmationSource.HOST_MANUAL,
+        }),
+      );
     });
 
-    it('should waive OVERDUE record (any status allowed)', async () => {
-      const overdueRecord = { ...mockRecord, status: PaymentStatus.OVERDUE } as PaymentRecordEntity;
-      const waivedRecord = { ...mockRecord, status: PaymentStatus.WAIVED } as PaymentRecordEntity;
-      
-      recordRepo.findById.mockResolvedValue(overdueRecord);
+    it('should mark PAID record as REFUNDED', async () => {
+      const paidRecord = {
+        ...mockRecord,
+        status: PaymentStatus.PAID,
+      } as PaymentRecordEntity;
+      const refundedRecord = {
+        ...mockRecord,
+        status: PaymentStatus.REFUNDED,
+      } as PaymentRecordEntity;
+
+      recordRepo.findById.mockResolvedValue(paidRecord);
       memberRepo.findById.mockResolvedValue(mockMember as any);
       groupRepo.findById.mockResolvedValue(mockGroup as any);
-      recordRepo.update.mockResolvedValue(waivedRecord);
+      recordRepo.update.mockResolvedValue(refundedRecord);
 
       const result = await service.waivePayment('record-123', 'host-123');
-      expect(result.status).toBe(PaymentStatus.WAIVED);
+      expect(result.status).toBe(PaymentStatus.REFUNDED);
     });
   });
 
@@ -369,7 +437,11 @@ describe('PaymentsService', () => {
       periodRepo.findById.mockResolvedValue(period as any);
       recordRepo.findByPeriodId.mockResolvedValue(allRecords as any);
 
-      const result = await service.getPeriodDetail('group-123', 'period-123', 'host-123');
+      const result = await service.getPeriodDetail(
+        'group-123',
+        'period-123',
+        'host-123',
+      );
 
       expect(result.myRole).toBe(MemberRole.HOST);
       expect(result.records).toHaveLength(2);
@@ -384,7 +456,11 @@ describe('PaymentsService', () => {
       periodRepo.findById.mockResolvedValue(period as any);
       recordRepo.findByPeriodAndMember.mockResolvedValue(myRecord as any);
 
-      const result = await service.getPeriodDetail('group-123', 'period-123', 'user-123');
+      const result = await service.getPeriodDetail(
+        'group-123',
+        'period-123',
+        'user-123',
+      );
 
       expect(result.myRole).toBe(MemberRole.PAYER);
       expect(result.records).toHaveLength(1);

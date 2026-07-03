@@ -66,13 +66,72 @@ export class MembersService {
 
     const email = dto.email.toLowerCase().trim();
 
-    // Duplicate check
-    const existingByEmail = await this.memberRepo.findByGroupAndEmail(groupId, email);
-    if (existingByEmail) {
+    // Check for active member (duplicate)
+    const activeMember = await this.memberRepo.findByGroupAndEmail(groupId, email);
+    if (activeMember) {
       throw new ConflictException({
         code: ErrorCode.MEMBER_ALREADY_EXISTS,
         message: 'Email ini sudah menjadi anggota grup',
       });
+    }
+
+    // Check for soft-deleted member to revive
+    const deletedMember = await this.memberRepo.findDeletedByGroupAndEmail(groupId, email);
+
+    if (deletedMember) {
+      // Validate split constraint before reactivating
+      this.splitService.validateBeforeAdd(
+        group,
+        currentCount,
+        dto.shareAmount,
+        dto.sharePercentage,
+      );
+
+      const user = await this.usersService.findByEmail(email);
+      const newCount = currentCount + 1;
+
+      let shareAmount = dto.shareAmount ?? 0;
+      let sharePercentage = dto.sharePercentage ?? null;
+
+      if (group.splitMethod === SplitMethod.EQUAL) {
+        const totalCost = parseFloat(group.totalAmount);
+        shareAmount = Math.floor((totalCost * 100) / newCount) / 100;
+        sharePercentage = null;
+      }
+
+      // ponytail: restore soft-deleted member instead of INSERT to avoid PK/unique conflicts
+      await this.memberRepo.restore(deletedMember.id);
+      await this.memberRepo.update(deletedMember.id, {
+        userId: user?.id ?? deletedMember.userId,
+        displayName: dto.displayName,
+        shareAmount: String(shareAmount),
+        sharePercentage: sharePercentage !== null ? String(sharePercentage) : null,
+        notificationPreference: dto.notificationPreference ?? NotificationPreference.BOTH,
+        status: MemberStatus.ACTIVE,
+      });
+
+      if (group.splitMethod === SplitMethod.EQUAL) {
+        await this.recalculateEqualShares(groupId);
+      }
+
+      // B1: Ensure payment records exist for upcoming periods
+      const upcoming = await this.periodRepo.findAllUpcomingByGroup(groupId);
+      const newShare = String(shareAmount);
+      for (const period of upcoming) {
+        const existing = await this.recordRepo.findByPeriodAndMember(period.id, deletedMember.id);
+        if (existing) {
+          await this.recordRepo.update(existing.id, { amountDue: newShare, status: PaymentStatus.PENDING });
+        } else {
+          await this.recordRepo.createEntity({
+            periodId: period.id,
+            memberId: deletedMember.id,
+            amountDue: newShare,
+            status: PaymentStatus.PENDING,
+          });
+        }
+      }
+
+      return this.memberRepo.findById(deletedMember.id) as Promise<GroupMemberEntity>;
     }
 
     // Validate split constraint before adding

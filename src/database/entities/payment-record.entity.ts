@@ -4,7 +4,11 @@ import { Exclude } from 'class-transformer';
 import { BaseEntity } from './base.entity.js';
 import { PaymentPeriodEntity } from './payment-period.entity.js';
 import { GroupMemberEntity } from './group-member.entity.js';
-import { PaymentStatus } from './enums.js';
+import {
+  GatewayProvider,
+  PaymentConfirmationSource,
+  PaymentStatus,
+} from './enums.js';
 
 @Entity('payment_records')
 export class PaymentRecordEntity extends BaseEntity {
@@ -50,6 +54,30 @@ export class PaymentRecordEntity extends BaseEntity {
   })
   status: PaymentStatus;
 
+  @Column({
+    type: 'enum',
+    enum: GatewayProvider,
+    name: 'gateway_provider',
+    nullable: true,
+  })
+  gatewayProvider: GatewayProvider | null;
+
+  @Column({
+    type: 'varchar',
+    length: 255,
+    name: 'gateway_reference_id',
+    nullable: true,
+  })
+  gatewayReferenceId: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 255,
+    name: 'gateway_transaction_id',
+    nullable: true,
+  })
+  gatewayTransactionId: string | null;
+
   @Column({ type: 'timestamptz', name: 'confirmed_at', nullable: true })
   confirmedAt: Date | null;
 
@@ -88,12 +116,18 @@ export class PaymentRecordEntity extends BaseEntity {
   @Column({ type: 'text', name: 'payment_note', nullable: true })
   paymentNote: string | null;
 
-  // Siapa yang mengkonfirmasi: 'self' | 'host' | 'webhook'
+  @Column({ type: 'timestamptz', name: 'paid_at', nullable: true })
+  paidAt: Date | null;
+
+  // Siapa yang mengkonfirmasi
   @Column({
     type: 'varchar',
-    length: 20,
+    length: 32,
     name: 'confirmed_by',
     nullable: true,
   })
-  confirmedBy: 'self' | 'host' | 'webhook' | null;
+  confirmedBy: PaymentConfirmationSource | null;
+
+  @Column({ type: 'int', name: 'version', default: 1 })
+  version: number;
 }

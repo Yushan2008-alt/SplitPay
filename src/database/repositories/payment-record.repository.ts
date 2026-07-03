@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PaymentRecordEntity } from '../entities/payment-record.entity.js';
-import { PaymentStatus } from '../entities/enums.js';
+import { PaymentStatus, PeriodStatus } from '../entities/enums.js';
 import { BaseRepository } from './base.repository.js';
 
 @Injectable()
@@ -24,6 +24,7 @@ export class PaymentRecordRepository extends BaseRepository<PaymentRecordEntity>
   async findByPeriodId(periodId: string): Promise<PaymentRecordEntity[]> {
     return this.repo.find({
       where: { periodId },
+      relations: { member: true },
       order: { createdAt: 'ASC' },
     });
   }
@@ -49,6 +50,21 @@ export class PaymentRecordRepository extends BaseRepository<PaymentRecordEntity>
     });
   }
 
+  async findByStatusWithRelations(status: PaymentStatus): Promise<PaymentRecordEntity[]> {
+    return this.repo.find({
+      where: { status },
+      relations: { period: { group: { host: true } }, member: { user: true } },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async findByIdWithRelations(id: string): Promise<PaymentRecordEntity | null> {
+    return this.repo.findOne({
+      where: { id },
+      relations: { period: { group: { host: true } }, member: { user: true } },
+    });
+  }
+
   async sumAmountCollectedByPeriod(
     periodId: string,
   ): Promise<string> {
@@ -66,5 +82,29 @@ export class PaymentRecordRepository extends BaseRepository<PaymentRecordEntity>
     status: PaymentStatus,
   ): Promise<number> {
     return this.repo.count({ where: { periodId, status } });
+  }
+
+  async findByGatewayReferenceId(
+    gatewayReferenceId: string,
+  ): Promise<PaymentRecordEntity | null> {
+    return this.repo.findOne({ where: { gatewayReferenceId } });
+  }
+
+  async findHistoryByMemberAndFilters(
+    memberId: string,
+    status?: PaymentStatus,
+    groupId?: string,
+  ): Promise<PaymentRecordEntity[]> {
+    const qb = this.repo
+      .createQueryBuilder('record')
+      .innerJoinAndSelect('record.period', 'period')
+      .innerJoinAndSelect('period.group', 'group')
+      .where('record.member_id = :memberId', { memberId })
+      .orderBy('period.due_date', 'DESC');
+
+    if (status) qb.andWhere('record.status = :status', { status });
+    if (groupId) qb.andWhere('period.group_id = :groupId', { groupId });
+
+    return qb.getMany();
   }
 }

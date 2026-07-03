@@ -4,6 +4,7 @@ export { GroupRepository } from './group.repository.js';
 export { GroupMemberRepository } from './group-member.repository.js';
 export { PaymentPeriodRepository } from './payment-period.repository.js';
 export { PaymentRecordRepository } from './payment-record.repository.js';
+export { PaymentWebhookLogRepository } from './payment-webhook-log.repository.js';
 export { OtpCodeRepository } from './otp-code.repository.js';
 export { RefreshTokenRepository } from './refresh-token.repository.js';
 export { PushSubscriptionRepository } from './push-subscription.repository.js';

@@ -16,6 +16,8 @@ import { BillingModule } from '../billing/billing.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
+import { PaymentGatewayModule } from '../payment-gateway/payment-gateway.module.js';
+import { ManualConfirmController } from './manual-confirm.controller.js';
 import { PaymentsController } from './payments.controller.js';
 import { PaymentsService } from './payments.service.js';
 import { SignedUrlService } from './signed-url.service.js';
@@ -31,9 +33,10 @@ import { SignedUrlService } from './signed-url.service.js';
     BillingModule,
     AuthModule, // For RedisService
     UsersModule, // For UserRepository
+    PaymentGatewayModule,
     forwardRef(() => NotificationsModule),
   ],
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, ManualConfirmController],
   providers: [
     PaymentsService,
     PaymentRecordRepository,

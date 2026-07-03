@@ -44,6 +44,21 @@ export class GroupMemberRepository extends BaseRepository<GroupMemberEntity> {
     });
   }
 
+  async findDeletedByGroupAndEmail(
+    groupId: string,
+    email: string,
+  ): Promise<GroupMemberEntity | null> {
+    // Find soft-deleted members (deleted_at IS NOT NULL) — include withDeleted
+    return this.repo.findOne({
+      where: { groupId, email: email.toLowerCase().trim() },
+      withDeleted: true,
+    });
+  }
+
+  async restore(id: string): Promise<void> {
+    await this.repo.restore(id);
+  }
+
   async findByGroupAndUser(
     groupId: string,
     userId: string,

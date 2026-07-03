@@ -3,6 +3,7 @@ import { Transform } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -39,20 +40,24 @@ export class CreateGroupDto {
   description?: string;
 
   /** Total biaya langganan dalam Rupiah. Min 1000, Max 100_000_000 */
+  @IsNotEmpty({ message: 'Total biaya wajib diisi' })
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1000)
   @Max(100_000_000)
   totalAmount!: number;
 
+  @IsNotEmpty({ message: 'Frekuensi billing wajib diisi' })
   @IsEnum(BillingFrequency)
   frequency!: BillingFrequency;
 
   /** Tanggal jatuh tempo bulanan (1–28) */
+  @IsNotEmpty({ message: 'Tanggal jatuh tempo wajib diisi' })
   @IsInt()
   @Min(1)
   @Max(28)
   dueDay!: number;
 
+  @IsNotEmpty({ message: 'Metode split wajib diisi' })
   @IsEnum(SplitMethod)
   splitMethod!: SplitMethod;
 
