@@ -52,10 +52,8 @@ async function bootstrap() {
   // API Versioning Prefix
   app.setGlobalPrefix('api/v1');
 
-  // Swagger Docs (non-production only)
-  if (process.env.NODE_ENV !== 'production') {
-    setupSwagger(app);
-  }
+  // Swagger Docs
+  setupSwagger(app);
 
   await app.listen(process.env.PORT ?? 3001);
 }
