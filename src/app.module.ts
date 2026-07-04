@@ -36,7 +36,7 @@ const infrastructureModules =
             password: config.get<string>('database.password'),
             database: config.get<string>('database.database'),
             ssl: config.get<boolean>('database.ssl')
-              ? { rejectUnauthorized: true }
+              ? { rejectUnauthorized: false }
               : false,
             extra: { family: 6 },
             autoLoadEntities: true,
