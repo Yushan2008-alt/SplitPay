@@ -35,9 +35,7 @@ const infrastructureModules =
             username: config.get<string>('database.username'),
             password: config.get<string>('database.password'),
             database: config.get<string>('database.database'),
-            ssl: config.get<boolean>('database.ssl')
-              ? { rejectUnauthorized: false }
-              : false,
+            ssl: { rejectUnauthorized: false },
             extra: { family: 6 },
             autoLoadEntities: true,
             synchronize: false,
