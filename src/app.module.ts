@@ -34,6 +34,7 @@ const infrastructureModules =
             ssl: config.get<boolean>('database.ssl')
               ? { rejectUnauthorized: true }
               : false,
+            extra: { family: 6 },
             autoLoadEntities: true,
             synchronize: false,
             logging: config.get<boolean>('database.logging'),
