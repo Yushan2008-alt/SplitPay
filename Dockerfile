@@ -17,6 +17,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
+COPY entrypoint.sh ./
+RUN chmod +x entrypoint.sh
 
 EXPOSE 3001
-CMD ["sh", "-c", "pnpm migration:run && node dist/main"]
+CMD ["./entrypoint.sh"]
