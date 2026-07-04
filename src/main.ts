@@ -22,6 +22,7 @@ async function bootstrap() {
           styleSrc: ["'self'", "'unsafe-inline'", 'cdn.jsdelivr.net'],
           imgSrc: ["'self'", 'data:', 'cdn.jsdelivr.net'],
           fontSrc: ["'self'", 'cdn.jsdelivr.net'],
+          upgradeInsecureRequests: null,
         },
       },
     }),
