@@ -27,10 +27,15 @@ async function bootstrap() {
     }),
   );
 
-  // [SECURITY] CORS – hanya izinkan origin frontend terdaftar
+  // [SECURITY] CORS – hanya izinkan origin frontend terdaftar + Swagger UI
   app.enableCors({
-    origin:
-      process.env.FRONTEND_URL?.split(',').map((origin) => origin.trim()) ?? [],
+    origin: function (origin, callback) {
+      const allowed = [
+        ...(process.env.FRONTEND_URL?.split(',').map((s) => s.trim()) ?? []),
+        'http://159.223.34.178:3001',
+      ];
+      callback(null, allowed.includes(origin) || !origin);
+    },
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
