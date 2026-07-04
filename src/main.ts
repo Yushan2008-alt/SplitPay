@@ -29,7 +29,7 @@ async function bootstrap() {
 
   // [SECURITY] CORS – hanya izinkan origin frontend terdaftar + Swagger UI
   app.enableCors({
-    origin: function (origin, callback) {
+    origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
       const allowed = [
         ...(process.env.FRONTEND_URL?.split(',').map((s) => s.trim()) ?? []),
         'http://159.223.34.178:3001',
