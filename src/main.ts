@@ -13,7 +13,19 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // [SECURITY] HTTP Security Headers
-  app.use(helmet());
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", 'cdn.jsdelivr.net'],
+          styleSrc: ["'self'", "'unsafe-inline'", 'cdn.jsdelivr.net'],
+          imgSrc: ["'self'", 'data:', 'cdn.jsdelivr.net'],
+          fontSrc: ["'self'", 'cdn.jsdelivr.net'],
+        },
+      },
+    }),
+  );
 
   // [SECURITY] CORS – hanya izinkan origin frontend terdaftar
   app.enableCors({
