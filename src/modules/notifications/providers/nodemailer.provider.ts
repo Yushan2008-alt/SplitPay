@@ -27,6 +27,8 @@ export class NodemailerProvider {
         port,
         secure: port === 465,
         auth: user && pass ? { user, pass } : undefined,
+        connectionTimeout: 5_000,
+        greetingTimeout: 5_000,
       });
     }
 
