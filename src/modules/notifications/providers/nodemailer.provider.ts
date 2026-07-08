@@ -1,41 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
-import type { Transporter } from 'nodemailer';
 
 @Injectable()
 export class NodemailerProvider {
   private readonly logger = new Logger(NodemailerProvider.name);
-  private readonly transporter: Transporter | null;
+  private readonly apiKey: string | null;
   private readonly from: string;
+  private readonly apiUrl = 'https://api.resend.com/emails';
 
   constructor(config: ConfigService) {
-    const host = config.get<string>('SMTP_HOST');
-
-    if (!host) {
-      this.logger.warn(
-        'SMTP_HOST not configured — emails will be logged but not sent',
-      );
-      this.transporter = null;
-    } else {
-      const port = config.get<number>('SMTP_PORT') ?? 587;
-      const user = config.get<string>('SMTP_USER');
-      const pass = config.get<string>('SMTP_PASS');
-
-      this.transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        auth: user && pass ? { user, pass } : undefined,
-        connectionTimeout: 5_000,
-        greetingTimeout: 5_000,
-      });
-    }
-
+    // ponytail: Resend HTTP API — DO blocks outbound SMTP ports
+    this.apiKey = config.get<string>('RESEND_API_KEY') ?? null;
     this.from =
       config.get<string>('MAIL_FROM') ??
       config.get<string>('RESEND_FROM_EMAIL') ??
       'noreply@splitpay.id';
+
+    if (!this.apiKey) {
+      this.logger.warn(
+        'RESEND_API_KEY not configured — emails will be logged but not sent',
+      );
+    }
   }
 
   // ponytail: mask PII in logs — show first char + domain only
@@ -51,23 +36,32 @@ export class NodemailerProvider {
   }): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const { to, subject, html } = params;
 
-    if (!this.transporter) {
+    if (!this.apiKey) {
       this.logger.log(
-        `[DEV MODE] Email to ${this.maskEmail(to)}: ${subject}\n(Set SMTP_HOST/SMTP_USER/SMTP_PASS to actually send)`,
+        `[DEV MODE] Email to ${this.maskEmail(to)}: ${subject}\n(Set RESEND_API_KEY to actually send)`,
       );
       return { success: true, messageId: 'dev-mode-no-send' };
     }
 
     try {
-      const info = await this.transporter.sendMail({
-        from: this.from,
-        to,
-        subject,
-        html,
+      const res = await fetch(this.apiUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ from: this.from, to, subject, html }),
       });
 
-      this.logger.log(`Email sent successfully to ${this.maskEmail(to)}: ${info.messageId}`);
-      return { success: true, messageId: info.messageId };
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        this.logger.error(`Resend API error [${res.status}]: ${body}`);
+        return { success: false, error: `Resend API error ${res.status}: ${body}` };
+      }
+
+      const data = await res.json().catch(() => ({} as any));
+      this.logger.log(`Email sent successfully to ${this.maskEmail(to)}: ${data.id ?? 'ok'}`);
+      return { success: true, messageId: data.id };
     } catch (err) {
       const errorMessage = (err as Error).message;
       this.logger.error(`Email send failed for ${this.maskEmail(to)}: ${errorMessage}`, err);
@@ -76,6 +70,6 @@ export class NodemailerProvider {
   }
 
   isConfigured(): boolean {
-    return this.transporter !== null;
+    return this.apiKey !== null;
   }
 }

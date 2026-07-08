@@ -1,37 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
-import type { Transporter } from 'nodemailer';
 
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
-  private readonly transporter: Transporter | null;
+  private readonly apiKey: string | null;
   private readonly from: string;
+  private readonly apiUrl = 'https://api.resend.com/emails';
 
   constructor(config: ConfigService) {
-    const host = config.get<string>('SMTP_HOST');
-
-    if (!host) {
-      this.logger.log('[DEV] No SMTP config — OTP emails will be logged only');
-      this.transporter = null;
-    } else {
-      const port = config.get<number>('SMTP_PORT') ?? 587;
-      const user = config.get<string>('SMTP_USER');
-      const pass = config.get<string>('SMTP_PASS');
-
-      this.transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        auth: user && pass ? { user, pass } : undefined,
-        connectionTimeout: 5_000,
-        greetingTimeout: 5_000,
-      });
-    }
-
+    // ponytail: Resend HTTP API over SMTP — DO blocks outbound SMTP ports
+    this.apiKey = config.get<string>('RESEND_API_KEY') ?? null;
     this.from =
       config.get<string>('MAIL_FROM') ?? 'noreply@splitpay.id';
+
+    if (!this.apiKey) {
+      this.logger.log('[DEV] No RESEND_API_KEY — OTP emails will be logged only');
+    }
   }
 
   // ponytail: mask PII in logs — show first char + domain only
@@ -41,20 +26,34 @@ export class MailService {
   }
 
   async sendOtpEmail(email: string, otp: string): Promise<void> {
-    if (!this.transporter) {
+    if (!this.apiKey) {
       this.logger.log(
-        `[DEV] No SMTP config — skipping email to ${this.maskEmail(email)}`,
+        `[DEV] No RESEND_API_KEY — skipping email to ${this.maskEmail(email)}`,
       );
       return;
     }
 
     try {
-      await this.transporter.sendMail({
-        from: this.from,
-        to: email,
-        subject: 'Kode OTP SplitPay Anda',
-        html: this.buildOtpEmail(otp),
+      const res = await fetch(this.apiUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: this.from,
+          to: email,
+          subject: 'Kode OTP SplitPay Anda',
+          html: this.buildOtpEmail(otp),
+        }),
       });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        this.logger.warn(
+          `Resend API error [${res.status}] for ${this.maskEmail(email)}: ${body}`,
+        );
+      }
     } catch (err) {
       this.logger.warn(
         `Email error for ${this.maskEmail(email)}: ${(err as Error).message}`,
