@@ -6,16 +6,15 @@ export class MailService {
   private readonly logger = new Logger(MailService.name);
   private readonly apiKey: string | null;
   private readonly from: string;
-  private readonly apiUrl = 'https://api.resend.com/emails';
+  private readonly apiUrl = 'https://api.sendgrid.com/v3/mail/send';
 
   constructor(config: ConfigService) {
-    // ponytail: Resend HTTP API over SMTP — DO blocks outbound SMTP ports
-    this.apiKey = config.get<string>('RESEND_API_KEY') ?? null;
-    this.from =
-      config.get<string>('MAIL_FROM') ?? 'noreply@splitpay.id';
+    // ponytail: SendGrid HTTP API — DO blocks outbound SMTP ports
+    this.apiKey = config.get<string>('SENDGRID_API_KEY') ?? null;
+    this.from = config.get<string>('MAIL_FROM') ?? 'noreply@splitpay.id';
 
     if (!this.apiKey) {
-      this.logger.log('[DEV] No RESEND_API_KEY — OTP emails will be logged only');
+      this.logger.log('[DEV] No SENDGRID_API_KEY — OTP emails will be logged only');
     }
   }
 
@@ -28,7 +27,7 @@ export class MailService {
   async sendOtpEmail(email: string, otp: string): Promise<void> {
     if (!this.apiKey) {
       this.logger.log(
-        `[DEV] No RESEND_API_KEY — skipping email to ${this.maskEmail(email)}`,
+        `[DEV] No SENDGRID_API_KEY — skipping email to ${this.maskEmail(email)}`,
       );
       return;
     }
@@ -41,18 +40,20 @@ export class MailService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: this.from,
-          to: email,
+          personalizations: [{ to: [{ email }] }],
+          from: { email: this.from },
           subject: 'Kode OTP SplitPay Anda',
-          html: this.buildOtpEmail(otp),
+          content: [{ type: 'text/html', value: this.buildOtpEmail(otp) }],
         }),
       });
 
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         this.logger.warn(
-          `Resend API error [${res.status}] for ${this.maskEmail(email)}: ${body}`,
+          `SendGrid API error [${res.status}] for ${this.maskEmail(email)}: ${body}`,
         );
+      } else {
+        this.logger.log(`Email sent to ${this.maskEmail(email)}`);
       }
     } catch (err) {
       this.logger.warn(

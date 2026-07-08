@@ -6,19 +6,16 @@ export class NodemailerProvider {
   private readonly logger = new Logger(NodemailerProvider.name);
   private readonly apiKey: string | null;
   private readonly from: string;
-  private readonly apiUrl = 'https://api.resend.com/emails';
+  private readonly apiUrl = 'https://api.sendgrid.com/v3/mail/send';
 
   constructor(config: ConfigService) {
-    // ponytail: Resend HTTP API — DO blocks outbound SMTP ports
-    this.apiKey = config.get<string>('RESEND_API_KEY') ?? null;
-    this.from =
-      config.get<string>('MAIL_FROM') ??
-      config.get<string>('RESEND_FROM_EMAIL') ??
-      'noreply@splitpay.id';
+    // ponytail: SendGrid HTTP API — DO blocks outbound SMTP ports
+    this.apiKey = config.get<string>('SENDGRID_API_KEY') ?? null;
+    this.from = config.get<string>('MAIL_FROM') ?? 'noreply@splitpay.id';
 
     if (!this.apiKey) {
       this.logger.warn(
-        'RESEND_API_KEY not configured — emails will be logged but not sent',
+        'SENDGRID_API_KEY not configured — emails will be logged but not sent',
       );
     }
   }
@@ -38,7 +35,7 @@ export class NodemailerProvider {
 
     if (!this.apiKey) {
       this.logger.log(
-        `[DEV MODE] Email to ${this.maskEmail(to)}: ${subject}\n(Set RESEND_API_KEY to actually send)`,
+        `[DEV MODE] Email to ${this.maskEmail(to)}: ${subject}\n(Set SENDGRID_API_KEY to actually send)`,
       );
       return { success: true, messageId: 'dev-mode-no-send' };
     }
@@ -50,13 +47,18 @@ export class NodemailerProvider {
           Authorization: `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ from: this.from, to, subject, html }),
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: to }] }],
+          from: { email: this.from },
+          subject,
+          content: [{ type: 'text/html', value: html }],
+        }),
       });
 
       if (!res.ok) {
         const body = await res.text().catch(() => '');
-        this.logger.error(`Resend API error [${res.status}]: ${body}`);
-        return { success: false, error: `Resend API error ${res.status}: ${body}` };
+        this.logger.error(`SendGrid API error [${res.status}]: ${body}`);
+        return { success: false, error: `SendGrid API error ${res.status}: ${body}` };
       }
 
       const data = await res.json().catch(() => ({} as any));

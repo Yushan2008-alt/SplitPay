@@ -27,8 +27,7 @@ export const validationSchema = Joi.object({
   SMTP_PORT: Joi.number().port().default(587),
   SMTP_USER: Joi.string().allow('').optional(),
   SMTP_PASS: Joi.string().allow('').optional(),
-  RESEND_API_KEY: Joi.string().allow('').optional(),
-  RESEND_FROM_EMAIL: Joi.string().email().optional(),
+  SENDGRID_API_KEY: Joi.string().allow('').optional(),
   MAIL_FROM: Joi.string().email().optional(),
   FONNTE_TOKEN: Joi.string().allow('').optional(),
 
