@@ -33,6 +33,7 @@ import { RedisService } from '../auth/redis.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { PaymentGatewayFactory } from '../payment-gateway/payment-gateway.factory.js';
 import type { ManualMarkPaidDto } from './dto/manual-mark-paid.dto.js';
+import type { WaivePaymentDto } from './dto/waive-payment.dto.js';
 
 type ReviewAction = 'approve' | 'reject';
 
@@ -233,6 +234,7 @@ export class PaymentsService {
   async waivePayment(
     recordId: string,
     hostUserId: string,
+    dto?: WaivePaymentDto,
   ): Promise<PaymentRecordEntity> {
     const record = await this.recordRepo.findById(recordId);
     if (!record) {
@@ -252,7 +254,7 @@ export class PaymentsService {
     const updated = await this.recordRepo.update(record.id, {
       status: target,
       confirmedBy: PaymentConfirmationSource.HOST_MANUAL,
-      paymentNote: 'Waived manually by host',
+      paymentNote: dto?.reason ? 'Waived: ' + dto.reason : 'Waived manually by host',
     });
     this.logger.log(`Host ${hostUserId} waived payment ${record.id} → ${target}`);
     return updated;
@@ -353,6 +355,63 @@ export class PaymentsService {
       ),
     );
     return records.flat();
+  }
+
+  async sendManualReminders(
+    groupId: string,
+    periodId: string,
+    hostUserId: string,
+  ): Promise<{ sent: number }> {
+    const { period, records, myRole } = await this.getPeriodDetail(groupId, periodId, hostUserId);
+
+    if (myRole !== MemberRole.HOST) {
+      throw new ForbiddenException({
+        code: ErrorCode.NOT_GROUP_HOST,
+        message: 'Hanya host yang dapat mengirim notifikasi manual',
+      });
+    }
+
+    const group = await this.groupRepo.findById(groupId);
+    if (!group) {
+      throw new NotFoundException({
+        code: ErrorCode.GROUP_NOT_FOUND,
+        message: 'Grup tidak ditemukan',
+      });
+    }
+
+    const hostName = group.host?.name || 'Host';
+    const now = new Date();
+    const dueDate = new Date(period.dueDate);
+    const diffTime = dueDate.getTime() - now.getTime();
+    const daysUntilDue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    const pendingRecords = records.filter(
+      (r) => r.status === PaymentStatus.PENDING,
+    );
+
+    let sent = 0;
+    for (const record of pendingRecords) {
+      const member = record.member;
+      if (!member) continue;
+
+      await this.notificationsService.sendPaymentReminder({
+        recordId: record.id,
+        memberId: member.id,
+        groupId: period.groupId,
+        periodId: period.id,
+        dueDate: period.dueDate.toString(),
+        amountDue: record.amountDue,
+        serviceName: group.serviceName,
+        memberName: member.displayName,
+        memberEmail: member.email,
+        hostName,
+        daysUntilDue,
+        notificationPreference: member.notificationPreference,
+      });
+      sent++;
+    }
+
+    return { sent };
   }
 
   // ─── PERIOD HISTORY ───────────────────────────────────────────────────────

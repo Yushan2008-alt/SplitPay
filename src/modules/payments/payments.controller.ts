@@ -32,6 +32,7 @@ import { PaymentStatus } from '../../database/entities/enums.js';
 import { PaymentsService } from './payments.service.js';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto.js';
 import { ManualMarkPaidDto } from './dto/manual-mark-paid.dto.js';
+import { WaivePaymentDto } from './dto/waive-payment.dto.js';
 
 @Controller('payments')
 @UseGuards(JwtAuthGuard)
@@ -135,8 +136,24 @@ export class PaymentsController {
   async waivePayment(
     @Param('recordId', ParseUUIDPipe) recordId: string,
     @CurrentUser('sub') hostUserId: string,
+    @Body() dto: WaivePaymentDto,
   ) {
-    return this.paymentsService.waivePayment(recordId, hostUserId);
+    return this.paymentsService.waivePayment(recordId, hostUserId, dto);
+  }
+
+  @Post('periods/:periodId/remind')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '[HOST] Send manual reminders for a period',
+    description: 'Host mengirim notifikasi secara manual ke member yang belum membayar.',
+  })
+  @ApiResponse({ status: 200, description: 'Notifikasi berhasil dikirim' })
+  async sendManualReminders(
+    @Param('periodId', ParseUUIDPipe) periodId: string,
+    @Query('groupId', ParseUUIDPipe) groupId: string,
+    @CurrentUser('sub') hostUserId: string,
+  ) {
+    return this.paymentsService.sendManualReminders(groupId, periodId, hostUserId);
   }
 
   // ─── GATEWAY PAYMENT LINK ──────────────────────────────────────────────────
